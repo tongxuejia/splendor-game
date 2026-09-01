@@ -520,30 +520,121 @@ button.gem:disabled:hover{transform:none;}
 }
 #turnBanner.show{opacity:1; transform:translateX(-50%) scale(1);}
 
-/* 响应式:窄屏缩小卡牌与宝石 */
+/* ═══════════ 手机紧凑模式 ═══════════
+   核心:牌库 + 4 张卡恒定单行不换行,卡宽随视口流动。
+   换行是纵向滚动的主要来源——一旦换行,三级牌桌会从 3 行膨胀到 6~9 行。 */
 @media (max-width: 720px){
-  :root{--cw:108px; --ch:166px;}
-  .gem{width:38px; height:38px;}
-  #aiThinking{top:8px; min-height:56px; padding:8px 12px;}
-  .ai-thinking-gem{flex-basis:34px; width:34px; height:34px;}
-  #turnBanner{font-size:18px; padding:10px 24px;}
-  .card .bonus-mark{width:22px; height:22px; top:5px; right:5px;}
-  .card .card-top-strip{height:36px; transform:translateY(-4px);}
-  .card .corner{width:22px; min-width:22px; height:22px; top:5px; left:5px; padding:0;}
-  .card .corner .pts{font-size:18px;}
-  .card .card-body{flex-basis:30px; padding:4px 6px;}
-  .card .actions{right:5px; bottom:35px;}
-  .card .level-mark{font-size:9px; left:6px; bottom:4px;}
-  .card .cost{gap:3px; min-height:21px;}
-  .cost-gem{width:20px; height:20px; font-size:12px;}
-  .card .cost .cost-gem{width:21px; height:21px; font-size:13px;}
-  .player .purchased-row{grid-template-columns:28px minmax(0,1fr); gap:4px;}
-  .purchased-row .tag{width:28px;}
-  .purchased-grid{grid-template-columns:repeat(5,minmax(0,1fr)); gap:3px; width:100%;}
-  .owned-card-score{left:2px;}
-  .owned-card .owned-card-bonus{right:2px;}
-  .owned-card-cost .cost-gem{width:11px; height:11px; font-size:7px;}
-  .owned-card-cost{padding-left:12px;}
+  /* 卡宽不再用 100vw 猜算(100vw 含滚动条宽度,会导致卡片被 flex-shrink 意外压缩),
+     改为 flex:1 1 0 + aspect-ratio 完全流式;高度由比例推导,牌库靠 align-self:stretch 对齐 */
+  :root{
+    --pad:5px; --rgap:3px; --deckw:30px;
+  }
+  body{padding:8px var(--pad);}
+  h1{font-size:15px; letter-spacing:1px;}
+
+  /* 开始设置页:去掉桌面留白,单屏可见 */
+  #setup{margin:14px auto; padding:14px 16px;}
+  #setup h1{margin-bottom:10px;}
+  #setup label{margin:9px 0 4px; font-size:13px;}
+  #setup select,#setup input{padding:7px 8px; font-size:14px;}
+  #setup .btn{margin-top:12px;}
+
+  /* 顶栏压缩,日志限约两行 */
+  #topbar{margin-bottom:4px;}
+  #turnHint{font-size:13px;}
+  #log{max-height:30px; font-size:11px;}
+
+  /* 贵族:强制单行,定尺寸小卡,避免整块撑高 */
+  #nobles{gap:var(--rgap); margin-bottom:5px; min-height:0; flex-wrap:nowrap; justify-content:center;}
+  .noble{width:66px; height:66px; flex:0 0 66px; min-width:0; aspect-ratio:1;}
+  .noble .pts{width:15px; height:15px; top:1px; right:1px;}
+  .noble .pts > span{font-size:12px; transform:none;}
+  .noble-info{flex:0 0 17px; padding:1px 2px;}
+  .noble .req{gap:1px;}
+  .noble .cost-gem{width:11px; height:11px; font-size:8px; border-width:1px;}
+  .noble-title{font-size:6px; left:2px; bottom:18px;}
+  .noble-taken{font-size:6px; right:2px; bottom:18px;}
+
+  /* 宝石库:说明文字独占一行,6 颗宝石单行 */
+  #bank{gap:4px; margin:5px 0;}
+  #bank .lbl{flex:1 1 100%; margin:0; font-size:9px; line-height:1.2;}
+  .gem{width:30px; height:30px; font-size:12px;}
+
+  /* 牌桌:三级各占一行,牌库 + 4 张卡恒定单行 */
+  #board{gap:6px; margin:6px 0;}
+  .levelRow{flex-wrap:nowrap; gap:var(--rgap);}
+  .card{width:auto; height:auto; flex:1 1 0; min-width:0; max-width:104px; aspect-ratio:148/206; border-radius:6px;}
+  .deck{flex:0 0 var(--deckw); width:var(--deckw); height:auto; align-self:stretch; font-size:12px; line-height:1.2; border-width:1px; border-radius:6px;}
+  .deck .dname{display:none;}
+  .deck .dlvl{font-size:14px; color:#eee; font-weight:bold;}
+  .deck .cnt{font-size:11px; margin-top:0;}
+  .deck .blind{display:none;}
+
+  /* 卡面元素等比收缩;成本强制单行——换行会被 .card 的 overflow:hidden 裁掉 */
+  .card .card-top-strip{height:20px; transform:translateY(-3px);}
+  .card .bonus-mark{width:13px; height:13px; top:2px; right:2px; border-width:1px; border-radius:3px;}
+  .card .corner{width:14px; min-width:14px; height:14px; top:2px; left:2px; padding:0;}
+  .card .corner::before{inset:1px;}
+  .card .corner .pts{font-size:11px; transform:none;}
+  .card .level-mark{font-size:6px; left:2px; bottom:1px;}
+  .card .card-art.art-failed::before{font-size:8px;}
+  .card .card-body{flex:0 0 21px; padding:1px 2px;}
+  .card .cost{gap:1px; min-height:13px; flex-wrap:nowrap;}
+  .card .cost .cost-gem{width:13px; height:13px; min-width:11px; font-size:9px; border-width:1px;}
+  .cost-gem.disc::after{font-size:10px;}
+  .card .actions{right:1px; bottom:23px; gap:1px;}
+  .card .actions .btn{padding:1px 4px; font-size:10px; margin:0; border-radius:4px;}
+  .card .hint{font-size:9px; margin-top:0;}
+
+  /* 玩家面板:窄屏两列,内部全部改流式栅格 */
+  #players{grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:5px; margin-top:6px;}
+  .player{padding:5px 6px; border-radius:8px;}
+  .player .head{margin-bottom:1px;}
+  .player .name{font-size:12px;}
+  .player .score{font-size:15px;}
+  .player .row{margin:2px 0; gap:3px;}
+  .player .tag{font-size:9px; width:20px;}
+  .player .resource-row{grid-template-columns:20px minmax(0,1fr); gap:3px;}
+  .player .resource-slots{grid-template-columns:repeat(6,minmax(0,1fr)); gap:1px;}
+  .player .gems .gem{width:100%; max-width:21px; height:21px; font-size:9px;}
+  .player-nobles{gap:2px;}
+  .player-noble{width:18px; height:23px;}
+  .bgem{width:21px; height:21px; border-width:1px;}
+  .bgem::before{width:16px; height:16px;}
+  .bgem .bonus-count{font-size:10px;}
+  .player .reserved{gap:3px; margin-top:2px;}
+  .rmini{width:40px; height:52px;}
+  .rmini-art{height:33px;}
+  .rmini-top-strip{height:12px; transform:translateY(-2px);}
+  .rmini-art .mini-bonus{width:10px; height:10px; top:1px; right:1px;}
+  .rmini .pts{width:10px; min-width:10px; height:10px; top:1px; left:1px; font-size:8px; transform:none;}
+  .rmini-body{height:19px; padding:1px 2px;}
+  .rmini .cost-gem{width:10px; height:10px; font-size:7px;}
+  .rmini-body .btn{right:1px; bottom:21px; padding:1px 4px; font-size:9px;}
+  .player .purchased-row{grid-template-columns:20px minmax(0,1fr); gap:3px; margin-top:3px;}
+  .purchased-row .tag{width:20px;}
+  .purchased-grid{grid-template-columns:repeat(5,minmax(0,1fr)); gap:2px; width:100%;}
+  .owned-card-score{width:10px; height:10px; left:1px; font:700 9px/1 Georgia,serif;}
+  .owned-card .owned-card-bonus{width:9px; height:9px; right:1px; top:1px;}
+  .owned-card-top{height:14px;}
+  .owned-card-cost{padding-left:8px;}
+  .owned-card-cost .cost-gem{width:8px; height:8px; font-size:5px;}
+  .owned-card-level{font-size:5px;}
+
+  /* 操作条 */
+  #actionbar{padding:5px 6px; gap:5px; margin-top:6px; border-radius:8px;}
+  #actionbar .msg{font-size:11px; flex:1 1 100%;}
+  #selGems{gap:2px;}
+  #selGems .gem{width:24px; height:24px; font-size:9px;}
+  #actionbar .btn{padding:5px 8px; font-size:12px; margin:0;}
+
+  /* 悬浮提示 */
+  #aiThinking{top:6px; min-height:48px; padding:6px 10px; gap:9px; width:min(400px,calc(100vw - 12px));}
+  .ai-thinking-gem{flex-basis:28px; width:28px; height:28px;}
+  .ai-thinking-gem::before{width:18px; height:18px;}
+  .ai-thinking-copy strong{font-size:13px;}
+  .ai-thinking-copy span{font-size:10px;}
+  #turnBanner{font-size:15px; padding:7px 18px;}
 }
 @media (prefers-reduced-motion: reduce){
   #aiThinking,.ai-thinking-gem::before,.ai-thinking-gem::after,
@@ -1762,7 +1853,7 @@ function renderBoard(){
   let html = "";
   for(const lv of [3,2,1]){
     html += `<div class="levelRow"><div class="deck" data-lv="${lv}" title="点击盲留一张(暗牌)+1金币">
-      ${lv} 级牌库<div class="cnt">${S.decks[lv].length}</div><div class="blind">点击盲留</div></div>`;
+      <div class="dlabel"><span class="dlvl">${lv}</span><span class="dname"> 级牌库</span></div><div class="cnt">${S.decks[lv].length}</div><div class="blind">点击盲留</div></div>`;
     for(const card of S.board[lv]){
       html += cardHTML(card, `data-act="board" data-lv="${lv}" data-cid="${S.board[lv].indexOf(card)}"`);
     }
