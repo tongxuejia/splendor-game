@@ -105,6 +105,10 @@ h1{font-size:20px; margin-bottom:8px; color:#f0d98c; letter-spacing:2px;}
 /* 宝石库 */
 #bank{display:flex; gap:10px; margin:12px 0; align-items:center; flex-wrap:wrap;}
 #bank .lbl{color:#8a9bb0; font-size:13px; margin-right:6px;}
+/* 宝石库右侧:选中卡牌后的「买 / 留」操作组 */
+#cardActs{display:flex; gap:8px; align-items:center; margin-left:auto;}
+#cardActs .cap{color:#8a9bb0; font-size:12px;}
+#cardActs .btn{margin:0; padding:8px 20px; font-size:15px;}
 
 .gem{
   width:44px; height:44px; border-radius:8px; display:flex; flex-direction:column;
@@ -245,16 +249,13 @@ button.gem:disabled:hover{transform:none;}
   background:#f4f1e8;
 }
 .card .cost{display:flex; flex-wrap:wrap; gap:4px; min-height:28px;}
-.card .actions{
-  position:absolute; right:6px; bottom:44px; z-index:3;
-  display:flex; gap:4px;
-}
-.card .actions .btn{
-  border:1px solid rgba(255,255,255,.36);
-  box-shadow:0 2px 6px rgba(0,0,0,.5);
-}
 .card.afford{outline:2px solid #7fd4a0;}
-.card .hint{font-size:10px; color:#777; margin-top:4px;}
+#board .card,.player.cur .rmini{cursor:pointer;}
+.card.sel,.rmini.sel{
+  outline:3px solid #f0d98c; outline-offset:2px;
+  box-shadow:0 0 0 6px rgba(240,217,140,.22),0 6px 16px rgba(0,0,0,.6);
+  transform:translateY(-3px);
+}
 /* 成本被折扣覆盖的部分:变暗并打勾 */
 .cost-gem.disc{opacity:.35; position:relative;}
 .cost-gem.disc::after{
@@ -349,10 +350,10 @@ button.gem:disabled:hover{transform:none;}
 }
 .rmini-body{height:29px; padding:5px 6px;}
 .rmini .cost-gem{width:18px; height:18px; border-width:1px; font-size:11px;}
-.rmini-body .btn{
-  position:absolute; right:4px; bottom:33px; margin:0 !important;
-  border:1px solid rgba(255,255,255,.36);
-  box-shadow:0 2px 5px rgba(0,0,0,.5);
+.rmini.afford{outline:2px solid #7fd4a0;}
+.player .rmini.sel{
+  outline:3px solid #f0d98c; outline-offset:2px;
+  box-shadow:0 0 0 6px rgba(240,217,140,.22),0 6px 16px rgba(0,0,0,.6);
 }
 .player .purchased-row{
   display:grid; grid-template-columns:34px minmax(0,1fr); gap:6px;
@@ -559,6 +560,9 @@ button.gem:disabled:hover{transform:none;}
   #bank{gap:4px; margin:5px 0;}
   #bank .lbl{flex:1 1 100%; margin:0; font-size:9px; line-height:1.2;}
   .gem{width:30px; height:30px; font-size:12px;}
+  #cardActs{gap:4px;}
+  #cardActs .cap{display:none;}
+  #cardActs .btn{padding:4px 9px; font-size:12px;}
 
   /* 牌桌:三级各占一行,牌库 + 4 张卡恒定单行 */
   #board{gap:6px; margin:6px 0;}
@@ -582,9 +586,8 @@ button.gem:disabled:hover{transform:none;}
   .card .cost{gap:1px; min-height:13px; flex-wrap:nowrap;}
   .card .cost .cost-gem{width:13px; height:13px; min-width:11px; font-size:9px; border-width:1px;}
   .cost-gem.disc::after{font-size:10px;}
-  .card .actions{right:1px; bottom:23px; gap:1px;}
-  .card .actions .btn{padding:1px 4px; font-size:10px; margin:0; border-radius:4px;}
-  .card .hint{font-size:9px; margin-top:0;}
+  .card.sel,.rmini.sel{outline-width:2px; outline-offset:1px; box-shadow:none; transform:translateY(-2px);}
+  .player .rmini.sel{outline-width:2px; box-shadow:none;}
 
   /* 玩家面板:窄屏两列,内部全部改流式栅格 */
   #players{grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:5px; margin-top:6px;}
@@ -610,7 +613,6 @@ button.gem:disabled:hover{transform:none;}
   .rmini .pts{width:10px; min-width:10px; height:10px; top:1px; left:1px; font-size:8px; transform:none;}
   .rmini-body{height:19px; padding:1px 2px;}
   .rmini .cost-gem{width:10px; height:10px; font-size:7px;}
-  .rmini-body .btn{right:1px; bottom:21px; padding:1px 4px; font-size:9px;}
   .player .purchased-row{grid-template-columns:20px minmax(0,1fr); gap:3px; margin-top:3px;}
   .purchased-row .tag{width:20px;}
   .purchased-grid{grid-template-columns:repeat(5,minmax(0,1fr)); gap:2px; width:100%;}
@@ -1258,6 +1260,7 @@ function initGame(participants, mode, aiDifficulty="normal", skin="court"){
     mode, aiDifficulty, skin,
     cur:0, phase:"action",
     gemSel:{W:0,B:0,G:0,R:0,K:0},
+    sel:null,          /* 选中的卡牌:{src:"board"|"res", lv, idx} */
     actionTaken:false,
     endTriggeredBy:-1,
     log:[],
@@ -1544,7 +1547,7 @@ function buyCard(card, fromReserved, levelIdx){
   }
   const sourceRect = sourceEl ? sourceEl.getBoundingClientRect() : null;
   const flyer = sourceEl ? sourceEl.cloneNode(true) : null;
-  if(flyer) flyer.querySelectorAll('button,.actions').forEach(el=>el.remove());
+  if(flyer) flyer.classList.remove('afford','sel');
 
   const pay = costFor(p, card);
   for(const c of COLORS){ p.tokens[c] -= pay[c]; S.tokens[c] += pay[c]; }
@@ -1560,6 +1563,7 @@ function buyCard(card, fromReserved, levelIdx){
   }
   logMsg(`${p.name} 购买了 ${COLOR_NAME[card.color]}色 ${card.pts}分卡(花费 ${costText(pay)})`);
   S.actionTaken = true;
+  S.sel = null;
 
   if(flyer && sourceRect && !window.matchMedia('(prefers-reduced-motion: reduce)').matches){
     flyCardAnimate(flyer, sourceRect, ()=>{
@@ -1647,7 +1651,7 @@ function reserveCard(card, level){
   }
   const sourceRect = sourceEl ? sourceEl.getBoundingClientRect() : null;
   const flyer = sourceEl ? sourceEl.cloneNode(true) : null;
-  if(flyer) flyer.querySelectorAll('button,.actions').forEach(el=>el.remove());
+  if(flyer) flyer.classList.remove('afford','sel');
 
   if(card){
     const b = S.board[level];
@@ -1662,6 +1666,7 @@ function reserveCard(card, level){
   const gotGold = S.tokens.O>0;
   if(S.tokens.O>0){ S.tokens.O--; p.tokens.O++; }
   S.actionTaken = true;
+  S.sel = null;
   logMsg(`${p.name} 预留了${card?"场上":"牌库"}一张卡${gotGold?"(+1金币)":"(金币已空,未获得)"}`);
 
   if(flyer && sourceRect && !window.matchMedia('(prefers-reduced-motion: reduce)').matches){
@@ -1734,6 +1739,7 @@ function nextTurn(){
   S.phase = "action";
   S.actionTaken = false;
   S.gemSel = {W:0,B:0,G:0,R:0,K:0};
+  S.sel = null;
   showTurnBanner(cp().name);
   render();
   scheduleAITurn();
@@ -1782,9 +1788,7 @@ function msg(t){ $("msg").textContent = t; }
 function render(){
   renderTurn(); renderNobles(); renderBoard(); renderBank(); renderPlayers(); renderSel();
   renderAIThinking();
-  if(S.phase==="action"){
-    msg(cp().isAI ? `${cp().name} 正在思考...` : `轮到 ${cp().name}:拿宝石(点下方宝石库)/ 买卡 / 预留卡`);
-  }
+  if(S.phase==="action") msg(turnHintText());
   $("cancelBtn").disabled = S.phase!=="action" || cp().isAI;
   $("surrenderBtn").disabled = S.phase!=="action" || cp().isAI;
   $("log").innerHTML = [...S.log].reverse().map(t=>`<div>${t}</div>`).join("");
@@ -1830,9 +1834,9 @@ function costGemsHTML(cost, player){
     return `<div class="cost-gem ${COLOR_CLASS(c)} ${disc?"disc":""}" title="${COLOR_NAME[c]}${disc?"(折扣已覆盖)":""}">${k}</div>`;
   }).join("");
 }
-function cardHTML(card, extra=""){
+function cardHTML(card, extra="", cls=""){
   const afford = S.phase==="action" && !cp().isAI && canAfford(cp(), card);
-  return `<div class="card ${afford?"afford":""}" ${extra}>
+  return `<div class="card ${afford?"afford":""}${cls}" ${extra}>
     <div class="card-art">
       <img src="${cardArtURL(card)}" alt="${card.lv}级${COLOR_NAME[card.color]}色发展卡插画"
         loading="eager" decoding="async"
@@ -1844,7 +1848,6 @@ function cardHTML(card, extra=""){
     </div>
     <div class="card-body">
       <div class="cost">${costGemsHTML(card.cost, cp())}</div>
-      <div class="actions"></div>
     </div>
   </div>`;
 }
@@ -1854,31 +1857,45 @@ function renderBoard(){
   for(const lv of [3,2,1]){
     html += `<div class="levelRow"><div class="deck" data-lv="${lv}" title="点击盲留一张(暗牌)+1金币">
       <div class="dlabel"><span class="dlvl">${lv}</span><span class="dname"> 级牌库</span></div><div class="cnt">${S.decks[lv].length}</div><div class="blind">点击盲留</div></div>`;
-    for(const card of S.board[lv]){
-      html += cardHTML(card, `data-act="board" data-lv="${lv}" data-cid="${S.board[lv].indexOf(card)}"`);
+    for(let i=0;i<S.board[lv].length;i++){
+      const card = S.board[lv][i];
+      const picked = S.sel && S.sel.src==="board" && S.sel.lv===lv && S.sel.idx===i;
+      html += cardHTML(card, `data-lv="${lv}" data-cid="${i}"`, picked?" sel":"");
     }
     html += `</div>`;
   }
   box.innerHTML = html;
-  // 卡牌按钮:买 / 预留
+  // 点击卡牌 = 选中 / 取消选中,买与留由宝石库右侧的按钮触发
   box.querySelectorAll(".card").forEach(el=>{
-    const lv = +el.dataset.lv, card = S.board[lv]?.[+el.dataset.cid];
-    if(!card) return;
-    const acts = el.querySelector(".actions");
-    if(S.phase!=="action" || cp().isAI){
-      acts.innerHTML = S.phase==="action" ? "" : `<div class="hint">${COLOR_NAME[card.color]}色卡</div>`;
-      return;
-    }
-    acts.innerHTML =
-      `<button class="btn small ${canAfford(cp(),card)?"gold":""}" data-b="buy">买</button>` +
-      (cp().reserved.length<3 ? `<button class="btn small" data-b="res">留</button>`:"");
-    acts.querySelector('[data-b="buy"]').onclick = ()=>buyCard(card,false,lv);
-    if(acts.querySelector('[data-b="res"]')) acts.querySelector('[data-b="res"]').onclick = ()=>reserveCard(card,lv);
+    const lv = +el.dataset.lv, idx = +el.dataset.cid;
+    if(!S.board[lv]?.[idx]) return;
+    el.onclick = ()=>selectCard({src:"board", lv, idx});
   });
   box.querySelectorAll(".deck").forEach(el=>{
     const lv = +el.dataset.lv;
     el.onclick = ()=>{ if(S.phase==="action" && !cp().isAI) reserveCard(null,lv); };
   });
+}
+
+/* ── 卡牌选中态 ── */
+function selectedCard(){
+  const s = S.sel;
+  if(!s) return null;
+  return s.src==="board" ? (S.board[s.lv]?.[s.idx] || null) : (cp().reserved[s.idx] || null);
+}
+function selectCard(sel){
+  if(S.phase!=="action" || cp().isAI || S.actionTaken) return;
+  const cur = S.sel;
+  S.sel = (cur && cur.src===sel.src && cur.lv===sel.lv && cur.idx===sel.idx) ? null : sel;
+  if(S.sel) S.gemSel = {W:0,B:0,G:0,R:0,K:0};   // 拿宝石与买/留互斥:选卡时清空已选宝石
+  renderBoard(); renderPlayers(); renderBank(); renderSel();
+  const card = selectedCard();
+  msg(card ? `已选 ${COLOR_NAME[card.color]}色 ${card.pts}分 ${card.lv}级卡 —— 点「买」或「留」执行`
+           : turnHintText());
+}
+function turnHintText(){
+  return cp().isAI ? `${cp().name} 正在思考...`
+    : `轮到 ${cp().name}:点宝石库拿宝石,或点卡牌选中后按宝石库右侧的「买 / 留」`;
 }
 function renderBank(){
   let html = `<span class="lbl">宝石库(点击选择要拿的宝石,最多 3 个不同色;同色拿 2 个需该色剩 ≥4):</span>`;
@@ -1891,10 +1908,30 @@ function renderBank(){
       <span class="n">${n}</span></button>`;
   }
   html += `<div class="gem gold t" title="金币:预留卡时获得,可当任意颜色"><span class="n">${S.tokens.O}</span></div>`;
+  /* 宝石库右侧:先选卡,再买/留 */
+  const p = cp();
+  const sc = selectedCard();
+  const canAct = S.phase==="action" && !p.isAI && !S.actionTaken && !!sc;
+  const buyOk = canAct && canAfford(p, sc);
+  const resOk = canAct && S.sel.src==="board" && p.reserved.length<3;
+  html += `<div id="cardActs">
+    <span class="cap">${sc?`已选 ${COLOR_NAME[sc.color]}色 ${sc.pts}分`:"未选卡牌"}</span>
+    <button type="button" class="btn ${buyOk?"gold":""}" id="buyBtn" title="购买选中的卡牌" ${buyOk?"":"disabled"}>买</button>
+    <button type="button" class="btn" id="resBtn" title="预留选中的卡牌(+1金币)" ${resOk?"":"disabled"}>留</button>
+  </div>`;
   $("bank").innerHTML = html;
   $("bank").querySelectorAll(".gem[data-c]").forEach(el=>{
     el.onclick = ()=>{ if(!cp().isAI) clickBankGem(el.dataset.c); };
   });
+  $("buyBtn").onclick = ()=>{
+    const s = S.sel; if(!s) return;
+    if(s.src==="board") buyCard(S.board[s.lv][s.idx], false, s.lv);
+    else buyCard(cp().reserved[s.idx], true);
+  };
+  $("resBtn").onclick = ()=>{
+    const s = S.sel; if(!s || s.src!=="board") return;
+    reserveCard(S.board[s.lv][s.idx], s.lv);
+  };
 }
 function clickBankGem(c){
   if(S.phase!=="action" || S.actionTaken || cp().isAI) return;
@@ -1911,7 +1948,9 @@ function clickBankGem(c){
   const doubled = COLORS.some(x=>sel[x]===2);
   if(doubled){ msg("已选择同色 2 个,不能再拿第三个"); return; }
   sel[c] = 1;
+  if(S.sel){ S.sel = null; renderBoard(); renderPlayers(); }  // 拿宝石与买/留互斥
   renderBank(); renderSel();
+  msg(turnHintText());
 }
 // 同色双拿:点击自己已选中的宝石一次 → 变成拿 2 个
 function clickSelGem(c){
@@ -1959,7 +1998,8 @@ function renderPlayers(){
     }).join("");
     const reserved = p.reserved.map((card,j)=>{
       const afford = isCur && S.phase==="action" && canAfford(p,card);
-      return `<div class="rmini" style="${afford?"outline:2px solid #7fd4a0;":""}">
+      const picked = isCur && S.sel && S.sel.src==="res" && S.sel.idx===j;
+      return `<div class="rmini ${afford?"afford":""}${picked?" sel":""}" data-res="${j}">
         <div class="rmini-art">
           <img src="${cardArtURL(card)}" alt="${card.lv}级${COLOR_NAME[card.color]}色预留卡插画"
             loading="lazy" decoding="async"
@@ -1970,7 +2010,6 @@ function renderPlayers(){
         </div>
         <div class="rmini-body">
           <div class="cost" style="display:flex; flex-wrap:wrap; gap:3px;">${costGemsHTML(card.cost, p)}</div>
-          ${isCur&&!p.isAI&&S.phase==="action"?`<button class="btn small gold" style="margin-top:4px;" data-buy-res="${j}">买</button>`:""}
         </div>
       </div>`;
     }).join("");
@@ -2024,9 +2063,11 @@ function renderPlayers(){
       }
     };
   });
-  // 买预留卡
-  $("players").querySelectorAll("[data-buy-res]").forEach(el=>{
-    el.onclick = ()=>{ if(S.phase!=="action") return; buyCard(cp().reserved[+el.dataset.buyRes], true); };
+  // 点击自己的预留卡 = 选中,再按宝石库右侧的「买」
+  const curEl = $("players").querySelectorAll(".player")[S.cur];
+  if(curEl) curEl.querySelectorAll(".rmini").forEach(el=>{
+    const j = +el.dataset.res;
+    el.onclick = ()=>selectCard({src:"res", lv:null, idx:j});
   });
 }
 
