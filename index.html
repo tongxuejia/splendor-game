@@ -41,6 +41,8 @@ h1{font-size:20px; margin-bottom:8px; color:#f0d98c; letter-spacing:2px;}
 #game{max-width:1280px; margin:0 auto;}
 #topbar{display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;}
 #turnHint{font-size:16px; font-weight:bold; color:#7fd4a0;}
+.topline{display:flex; justify-content:flex-end; align-items:baseline; gap:8px;}
+#roundHint{font-size:14px; font-weight:bold; color:#f0d98c; white-space:nowrap;}
 #log{font-size:12px; color:#8a9bb0; max-height:60px; overflow-y:auto; text-align:right;}
 #log div{line-height:1.6;}
 
@@ -103,9 +105,11 @@ h1{font-size:20px; margin-bottom:8px; color:#f0d98c; letter-spacing:2px;}
 .noble-taken{position:absolute; right:5px; bottom:35px; z-index:2; color:#fff; font-size:10px;}
 
 /* 宝石库 */
-#bank{display:flex; gap:10px; margin:12px 0; align-items:center; flex-wrap:wrap;}
+/* 三列网格:左右两列等宽,中列的宝石组因此在整行里真正居中 */
+#bank{display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); gap:10px; margin:12px 0; align-items:center;}
+.bank-gems{grid-column:2; display:flex; gap:10px; align-items:center; justify-content:center; flex-wrap:wrap;}
 /* 宝石库右侧:选中卡牌后的「买 / 留」操作组 */
-#cardActs{display:flex; gap:8px; align-items:center; margin-left:auto;}
+#cardActs{grid-column:3; justify-self:end; display:flex; gap:8px; align-items:center;}
 #cardActs .cap{color:#8a9bb0; font-size:12px;}
 #cardActs .btn{margin:0; padding:8px 20px; font-size:15px; min-width:82px;}
 /* 「买」与「留」额外拉开(实际间距 = gap 8px + margin 10px = 18px),避免误触 */
@@ -544,6 +548,7 @@ button.gem:disabled:hover{transform:none;}
   /* 顶栏压缩,日志限约两行 */
   #topbar{margin-bottom:4px;}
   #turnHint{font-size:13px;}
+  #roundHint{font-size:12px;}
   #log{max-height:30px; font-size:11px;}
 
   /* 贵族:强制单行,定尺寸小卡,避免整块撑高 */
@@ -557,10 +562,11 @@ button.gem:disabled:hover{transform:none;}
   .noble-title{font-size:6px; left:2px; bottom:18px;}
   .noble-taken{font-size:6px; right:2px; bottom:18px;}
 
-  /* 宝石库:6 颗宝石与「买 / 留」同行 */
-  #bank{gap:4px; margin:5px 0;}
+  /* 宝石库:6 颗宝石与「买 / 留」同行(小屏没有多余留白给左右平衡列,退回单行 flex) */
+  #bank{display:flex; flex-wrap:wrap; gap:4px; margin:5px 0;}
+  .bank-gems{gap:4px; flex:0 1 auto;}
   .gem{width:30px; height:30px; font-size:12px;}
-  #cardActs{gap:4px;}
+  #cardActs{gap:4px; margin-left:auto;}
   #cardActs .cap{display:none;}
   #cardActs .btn{padding:4px 9px; font-size:12px; min-width:46px;}
   #cardActs .btn + .btn{margin-left:8px;} /* 小屏买/留间距 = 4 + 8 = 12px */
@@ -694,6 +700,7 @@ button.gem:disabled:hover{transform:none;}
 [data-skin="cartoon"] .btn.gold:hover{background:#ffb43a;}
 [data-skin="cartoon"] .btn:disabled{background:#ccc; color:#999;}
 [data-skin="cartoon"] #turnHint{color:#ff8c42;}
+[data-skin="cartoon"] #roundHint{color:#e8a020;}
 [data-skin="cartoon"] #log{color:#6a9bbf;}
 [data-skin="cartoon"] .noble{background:#fffcf5; border-color:#ffb8c8; box-shadow:0 3px 9px rgba(255,180,200,.3);}
 [data-skin="cartoon"] .noble-art{background:#ffd0e0;}
@@ -844,7 +851,10 @@ button.gem:disabled:hover{transform:none;}
   <div id="topbar">
     <h1>💎 璀璨宝石</h1>
     <div>
-      <div id="turnHint"></div>
+      <div class="topline">
+        <div id="turnHint"></div>
+        <div id="roundHint"></div>
+      </div>
       <div id="log"></div>
     </div>
   </div>
@@ -855,8 +865,8 @@ button.gem:disabled:hover{transform:none;}
   <div id="actionbar">
     <span class="msg" id="msg"></span>
     <div id="selGems"></div>
-    <button class="btn" id="okBtn">✓ 确认拿取</button>
-    <button class="btn" id="cancelBtn" style="background:#5a3040;">✗ 清空选择</button>
+    <button class="btn" id="okBtn">✓ 确认</button>
+    <button class="btn" id="cancelBtn" style="background:#5a3040;">✗ 清空</button>
     <button class="btn" id="surrenderBtn" style="background:#6a3535;">🏳 认输</button>
   </div>
 </div>
@@ -1300,6 +1310,7 @@ function initGame(participants, mode, aiDifficulty="normal", skin="court"){
     tokens, decks, board, nobles,
     mode, aiDifficulty, skin,
     cur:0, phase:"action",
+    turnCount:0,       /* 已完成的玩家回合数,用于换算轮次:Math.floor(turnCount/人数)+1 */
     gemSel:{W:0,B:0,G:0,R:0,K:0},
     sel:null,          /* 选中的卡牌:{src:"board"|"res", lv, idx} */
     actionTaken:false,
@@ -2245,6 +2256,7 @@ function nextTurn(){
     gameOver(); return;
   }
   S.cur = next;
+  S.turnCount++;
   S.phase = "action";
   S.actionTaken = false;
   S.gemSel = {W:0,B:0,G:0,R:0,K:0};
@@ -2276,6 +2288,7 @@ function showGameOverModal(){
   const win = ranked[0];
   showModal(`<h2>🏆 游戏结束</h2><div class="winner">冠军:${win.name}(${win.pts} 分)</div>`,
     ranked.map((p,i)=>`<div>${i+1}. ${p.name} — ${p.pts} 分 / ${p.cards} 张卡 / 贵族 ${p.nobles.length} 位</div>`).join("")
+    + `<div style="margin-top:10px; font-weight:bold; color:#f0d98c;">总轮次：${roundNumber()}</div>`
     + `<div style="display:flex;gap:10px;margin-top:16px;">`
     + `<button class="btn" style="flex:1;" id="viewBoardBtn">👁 看终局场面</button>`
     + `<button class="btn gold" style="flex:1;" onclick="location.reload()">再来一局</button>`
@@ -2295,7 +2308,7 @@ function msg(t){ $("msg").textContent = t; }
 
 /* ───────────────────────── 渲染 ───────────────────────── */
 function render(){
-  renderTurn(); renderNobles(); renderBoard(); renderBank(); renderPlayers(); renderSel();
+  renderTurn(); renderRound(); renderNobles(); renderBoard(); renderBank(); renderPlayers(); renderSel();
   renderAIThinking();
   if(S.phase==="action") msg(turnHintText());
   $("cancelBtn").disabled = S.phase!=="action" || cp().isAI;
@@ -2305,6 +2318,11 @@ function render(){
 function renderTurn(){
   const aiLabel = cp().isAI ? ` · AI(${aiProfile().label})` : "";
   $("turnHint").textContent = `第 ${S.cur+1} 位玩家 · ${cp().name}${aiLabel} · ${cp().pts} 分` + (S.endTriggeredBy>=0?` ⏹ 终局轮`:"");
+}
+/* 一轮 = 每位玩家各行动一次 */
+function roundNumber(){ return Math.floor(S.turnCount / S.players.length) + 1; }
+function renderRound(){
+  $("roundHint").textContent = `第 ${roundNumber()} 轮`;
 }
 function renderAIThinking(){
   const active = isAITurn();
@@ -2407,16 +2425,18 @@ function turnHintText(){
   return cp().isAI ? `${cp().name} 正在思考...` : "";
 }
 function renderBank(){
-  let html = "";
+  let gems = "";
   for(const c of COLORS){
     const n = S.tokens[c];
     const sel = S.gemSel[c];
     const disabled = S.phase!=="action" || cp().isAI || n<=0;
-    html += `<button type="button" class="gem ${COLOR_CLASS(c)} ${n?"":"empty"} ${sel?"sel":""}"
+    gems += `<button type="button" class="gem ${COLOR_CLASS(c)} ${n?"":"empty"} ${sel?"sel":""}"
       data-c="${c}" aria-label="${COLOR_NAME[c]}色宝石,剩余 ${n}" ${disabled?"disabled":""}>
       <span class="n">${n}</span></button>`;
   }
-  html += `<div class="gem gold t" title="金币:预留卡时获得,可当任意颜色"><span class="n">${S.tokens.O}</span></div>`;
+  gems += `<div class="gem gold t" title="金币:预留卡时获得,可当任意颜色"><span class="n">${S.tokens.O}</span></div>`;
+  /* 宝石单独成组,配合 #bank 的三列网格在整行里居中(右侧买/留不参与居中基准) */
+  let html = `<div class="bank-gems">${gems}</div>`;
   /* 宝石库右侧:先选卡,再买/留 */
   const p = cp();
   const sc = selectedCard();
@@ -2655,4 +2675,7 @@ $("startBtn").onclick = ()=>{
 };
 </script>
 </body>
+</html>
+</body>
+</html>
 </html>
