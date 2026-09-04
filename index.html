@@ -104,11 +104,12 @@ h1{font-size:20px; margin-bottom:8px; color:#f0d98c; letter-spacing:2px;}
 
 /* 宝石库 */
 #bank{display:flex; gap:10px; margin:12px 0; align-items:center; flex-wrap:wrap;}
-#bank .lbl{color:#8a9bb0; font-size:13px; margin-right:6px;}
 /* 宝石库右侧:选中卡牌后的「买 / 留」操作组 */
 #cardActs{display:flex; gap:8px; align-items:center; margin-left:auto;}
 #cardActs .cap{color:#8a9bb0; font-size:12px;}
-#cardActs .btn{margin:0; padding:8px 20px; font-size:15px;}
+#cardActs .btn{margin:0; padding:8px 20px; font-size:15px; min-width:82px;}
+/* 「买」与「留」额外拉开(实际间距 = gap 8px + margin 10px = 18px),避免误触 */
+#cardActs .btn + .btn{margin-left:10px;}
 
 .gem{
   width:44px; height:44px; border-radius:8px; display:flex; flex-direction:column;
@@ -556,18 +557,26 @@ button.gem:disabled:hover{transform:none;}
   .noble-title{font-size:6px; left:2px; bottom:18px;}
   .noble-taken{font-size:6px; right:2px; bottom:18px;}
 
-  /* 宝石库:说明文字独占一行,6 颗宝石单行 */
+  /* 宝石库:6 颗宝石与「买 / 留」同行 */
   #bank{gap:4px; margin:5px 0;}
-  #bank .lbl{flex:1 1 100%; margin:0; font-size:9px; line-height:1.2;}
   .gem{width:30px; height:30px; font-size:12px;}
   #cardActs{gap:4px;}
   #cardActs .cap{display:none;}
-  #cardActs .btn{padding:4px 9px; font-size:12px;}
+  #cardActs .btn{padding:4px 9px; font-size:12px; min-width:46px;}
+  #cardActs .btn + .btn{margin-left:8px;} /* 小屏买/留间距 = 4 + 8 = 12px */
 
   /* 牌桌:三级各占一行,牌库 + 4 张卡恒定单行 */
   #board{gap:6px; margin:6px 0;}
   .levelRow{flex-wrap:nowrap; gap:var(--rgap);}
   .card{width:auto; height:auto; flex:1 1 0; min-width:0; max-width:104px; aspect-ratio:148/206; border-radius:6px;}
+  /* 竖屏免滚动:牌桌恒为 3 行,卡高 = (视口高 - 其余区块)/3,视口变矮就压扁卡面。
+     卡身成本行是 flex:0 0 21px 固定值,插画 flex:1 min-height:0,所以压高度只会吃掉插画。
+     342/427 = 双人/多人(玩家面板换第二行)下除三行牌以外的全部纵向占用 + 约 15px 余量
+     (余量留给中局面板增长与地址栏抖动,实测双人 vh≥520、多人 vh≥600 即不滚动)。 */
+  .card{max-height:calc((100vh - 342px)/3); max-height:calc((100svh - 342px)/3); min-height:60px;}
+  #game:has(#players .player:nth-child(3)) .card{
+    max-height:calc((100vh - 427px)/3); max-height:calc((100svh - 427px)/3);
+  }
   .deck{flex:0 0 var(--deckw); width:var(--deckw); height:auto; align-self:stretch; font-size:12px; line-height:1.2; border-width:1px; border-radius:6px;}
   .deck .dname{display:none;}
   .deck .dlvl{font-size:14px; color:#eee; font-weight:bold;}
@@ -817,6 +826,7 @@ button.gem:disabled:hover{transform:none;}
     <option value="easy">简单</option>
     <option value="normal" selected>标准</option>
     <option value="hard">困难</option>
+    <option value="master">大师</option>
   </select>
   <label id="pcLabel" for="pcSelect">玩家人数(热座,轮流操作同一台电脑)</label>
   <select id="pcSelect">
@@ -877,27 +887,58 @@ const COLORS = ["W","B","G","R","K"];          // 白蓝绿红黑
 const GOLD   = "O";
 const COLOR_NAME = {W:"白",B:"蓝",G:"绿",R:"红",K:"黑",O:"金"};
 const COLOR_CLASS = c => "g"+c;
+/*
+ * 四档共用同一个前瞻内核(aiKernelDecide),难度只用「可量化旋钮」区分,不再各写一套魔法权重。
+ *   samples   隐藏牌抽样次数(0/1 = 不做 determinization 的平均)
+ *   kFollow   进入精算的候选动作宽度
+ *   quota     分桶剪枝:每类动作保留几个代表
+ *   lookahead 对手 1-ply 应手的混合系数(0 = 完全不想对手会应什么)
+ *   epsilon   决策噪声,softmax 温度 × 档位内分差(0 = 严格 argmax)
+ *   oppPolicy 对手模型:"greedy" 只贪心买卡,"play" 会参与交替推演
+ *   w.play / w.rounds  估值里「离 15 分还有多远」:交替贪心推演 aiPlayout(depth=rounds),
+ *     normal 6 步 / hard 10 步 / master 12 步;easy 关掉(=只看账面,不会规划)。
+ *   w.race 是同一项的廉价替代(aiRaceTurns 重规划回合数),已出厂档位不用,留作降级对照。
+ *   梯度靠「旋钮向量逐项支配」保证:easy < normal < hard < master 在每个旋钮上都不更优,
+ *   所以强弱关系是可推理的,不是调出来的巧合。
+ * w 里所有分值都是「分等价」量纲,可直接横向比较,这是四档能拉开梯度的前提。
+ */
 const AI_DIFFICULTIES = {
   easy:{
-    label:"简单", purchaseReserved:0,
-    purchasePts:8, purchaseLevel:1, purchaseNoble:1.5, purchaseSpent:3, purchaseGold:4,
-    targetPts:6, targetLevel:1, targetNoble:1, targetReserved:1, targetGap:6, targetCost:1,
-    threatPts:99, reservePts:5, reserveGap:2,
-    gemTarget:8, gemNoble:1, gemMarket:.6, doubleNeed:3,
+    label:"简单",
+    /* 新手:只看账面(分数/折扣/贵族),不规划撞线,不想对手,而且每步大约三选一地手软。
+       quota 里 buy 给 2 个名额是有意的 —— 只留 1 个会让它反复拿宝石把公共池抽干,
+       两边都买不了卡 → 整局撞回合上限。ptsEnd 故意低于 pts:看不出「谁先摸到 15 分」。 */
+    samples:1, kFollow:4, lookahead:0, epsilon:.7, oppPolicy:"greedy",
+    quota:{buy:2,res:1,resdeck:0,gems:1},
+    w:{pts:1, ptsEnd:1.2, play:0, race:0, discount:.15, noble:.15,
+       surplus:.3, tempoGems:.5, gold:.1, goldEnd:.4, block:0, blockEnd:0},
   },
   normal:{
-    label:"标准", purchaseReserved:2,
-    purchasePts:24, purchaseLevel:3, purchaseNoble:5, purchaseSpent:1, purchaseGold:2,
-    targetPts:12, targetLevel:3, targetNoble:4, targetReserved:4, targetGap:3, targetCost:.25,
-    threatPts:3, reservePts:3, reserveGap:4,
-    gemTarget:20, gemNoble:4, gemMarket:1, doubleNeed:2,
+    label:"标准",
+    /* 会推演,但只有 6 步深、抽样 2 次、候选宽度 6,还带 .2 的决策噪声 →
+       看得到自己的路线,看不到对手的反击。 */
+    samples:2, kFollow:6, lookahead:.35, epsilon:.2, oppPolicy:"greedy",
+    quota:{buy:3,res:2,resdeck:1,gems:2},
+    w:{pts:1, ptsEnd:2.2, play:.45, rounds:6, discount:.25, noble:.35,
+       surplus:.4, tempoGems:.45, gold:.2, goldEnd:1.6, block:.25, blockEnd:.7},
   },
   hard:{
-    label:"困难", purchaseReserved:4,
-    purchasePts:32, purchaseLevel:4, purchaseNoble:8, purchaseSpent:.75, purchaseGold:2.5,
-    targetPts:18, targetLevel:2, targetNoble:7, targetReserved:8, targetGap:4, targetCost:.5,
-    threatPts:2, reservePts:2, reserveGap:5,
-    gemTarget:30, gemNoble:8, gemMarket:1.4, doubleNeed:2,
+    label:"困难",
+    /* 与 master 同一套估值(play/rounds/贵族/卡位权重一致),只差「搜索深度」和「对手模型」:
+       hard 假设对手只会贪心买卡,master 假设对手会规划折扣引擎与贵族路线。 */
+    samples:4, kFollow:9, lookahead:.55, epsilon:0, oppPolicy:"greedy",
+    quota:{buy:5,res:3,resdeck:1,gems:3},
+    w:{pts:1, ptsEnd:2.5, play:.6, rounds:10, discount:.3, noble:.5,
+       surplus:.5, tempoGems:.5, gold:.3, goldEnd:2.2, block:.4, blockEnd:1},
+  },
+  master:{
+    label:"大师",
+    /* 上限档:同估值再加一档深度(抽样 6 次、推演 12 步),并把前瞻里的对手应手换成
+       oppPolicy:"play" —— 对手模型自己会推演,所以它能提前避开被卡死的路线。 */
+    samples:6, kFollow:11, lookahead:.7, epsilon:0, oppPolicy:"play",
+    quota:{buy:6,res:4,resdeck:1,gems:4},
+    w:{pts:1, ptsEnd:2.6, play:.6, rounds:12, discount:.3, noble:.5,
+       surplus:.5, tempoGems:.5, gold:.3, goldEnd:2.4, block:.45, blockEnd:1.1},
   },
 };
 const ART_API = "https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image";
@@ -1317,159 +1358,614 @@ function aiProfile(){
 function emptyGemSelection(){
   return {W:0,B:0,G:0,R:0,K:0};
 }
-function aiCardNeed(player, card){
-  return Object.fromEntries(COLORS.map(c=>[
-    c,
-    Math.max(0, (card.cost[c]||0) - (player.bonus[c]||0) - player.tokens[c]),
-  ]));
-}
-function aiNobleColorValue(player, color){
-  return S.nobles.reduce((score,n)=>{
-    if(n.taken!==null || !n.cost[color] || player.bonus[color]>=(n.cost[color]||0)) return score;
-    const gap = COLORS.reduce((sum,c)=>sum+Math.max(0,(n.cost[c]||0)-player.bonus[c]),0);
-    return score + 1 + 3/(gap+1);
-  },0);
-}
-function aiPurchaseValue(player, card, reserved=false){
-  const profile = aiProfile();
-  const pay = costFor(player, card);
-  const spent = COLORS.reduce((sum,c)=>sum+pay[c],0);
-  return card.pts*profile.purchasePts
-    + card.lv*profile.purchaseLevel
-    + aiNobleColorValue(player,card.color)*profile.purchaseNoble
-    + (reserved?profile.purchaseReserved:0)
-    - spent*profile.purchaseSpent
-    - pay.O*profile.purchaseGold;
-}
-function aiTargetValue(player, card, reserved=false){
-  const profile = aiProfile();
-  const need = aiCardNeed(player,card);
-  const rawGap = COLORS.reduce((sum,c)=>sum+need[c],0);
-  const gap = Math.max(0,rawGap-player.tokens.O);
-  const cost = COLORS.reduce((sum,c)=>sum+(card.cost[c]||0),0);
-  return card.pts*profile.targetPts
-    + card.lv*profile.targetLevel
-    + aiNobleColorValue(player,card.color)*profile.targetNoble
-    + (reserved?profile.targetReserved:0)
-    - gap*profile.targetGap
-    - cost*profile.targetCost;
-}
-function aiPurchaseOptions(player){
-  const options = [];
-  player.reserved.forEach(card=>options.push({card,fromReserved:true,level:card.lv}));
-  for(const lv of [1,2,3]){
-    S.board[lv].forEach(card=>options.push({card,fromReserved:false,level:lv}));
-  }
-  return options.filter(option=>canAfford(player,option.card))
-    .sort((a,b)=>aiPurchaseValue(player,b.card,b.fromReserved)-aiPurchaseValue(player,a.card,a.fromReserved));
-}
-function aiTargetOptions(player){
-  const options = [];
-  player.reserved.forEach(card=>options.push({card,fromReserved:true,level:card.lv}));
-  for(const lv of [1,2,3]){
-    S.board[lv].forEach(card=>options.push({card,fromReserved:false,level:lv}));
-  }
-  return options.sort((a,b)=>aiTargetValue(player,b.card,b.fromReserved)-aiTargetValue(player,a.card,a.fromReserved));
-}
-function aiChooseReservation(player){
-  if(player.reserved.length>=3) return null;
-  const profile = aiProfile();
-  const visible = [3,2,1].flatMap(lv=>S.board[lv].map(card=>({card,level:lv})));
-  if(!visible.length) return null;
-
-  const opponents = S.players.filter(candidate=>candidate!==player);
-  const threat = visible.filter(option=>
-    option.card.pts>=profile.threatPts && opponents.some(opponent=>canAfford(opponent,option.card))
-  ).sort((a,b)=>b.card.pts-a.card.pts || b.card.lv-a.card.lv)[0];
-  if(threat) return threat;
-
-  const best = visible.sort((a,b)=>aiTargetValue(player,b.card)-aiTargetValue(player,a.card))[0];
-  const need = aiCardNeed(player,best.card);
-  const gap = Math.max(0,COLORS.reduce((sum,c)=>sum+need[c],0)-player.tokens.O);
-  return S.tokens.O>0 && best.card.pts>=profile.reservePts && gap<=profile.reserveGap ? best : null;
-}
-function aiColorUtility(player, color, target){
-  const profile = aiProfile();
-  const targetNeed = target ? aiCardNeed(player,target.card)[color] : 0;
-  const marketNeed = [1,2,3].flatMap(lv=>S.board[lv]).reduce((score,card)=>
-    score + Math.min(2,Math.max(0,(card.cost[color]||0)-player.bonus[color])),0);
-  return targetNeed*profile.gemTarget
-    + aiNobleColorValue(player,color)*profile.gemNoble
-    + marketNeed*profile.gemMarket;
-}
-function aiChooseGemSelection(player, target){
-  const profile = aiProfile();
-  const selection = emptyGemSelection();
-  const available = COLORS.filter(c=>S.tokens[c]>0)
-    .sort((a,b)=>aiColorUtility(player,b,target)-aiColorUtility(player,a,target));
-  if(!available.length) return selection;
-
-  const need = target ? aiCardNeed(player,target.card) : emptyGemSelection();
-  const best = available[0];
-  if(need[best]>=profile.doubleNeed && S.tokens[best]>=4){
-    selection[best] = 2;
-    return selection;
-  }
-  available.slice(0,3).forEach(c=>{ selection[c]=1; });
-  return selection;
-}
 function aiDiscardTokens(){
   const player = cp();
-  const target = aiTargetOptions(player)[0] || null;
-  const need = target ? aiCardNeed(player,target.card) : emptyGemSelection();
-  const discarded = emptyGemSelection();
-  discarded.O = 0;
-
-  while(totalTokens(player)>10){
-    const candidates = [...COLORS,GOLD].filter(c=>player.tokens[c]>0);
-    candidates.sort((a,b)=>{
-      const value = c=>{
-        if(c===GOLD) return 100;
-        const losesNeededToken = player.tokens[c]-1 < need[c];
-        return (losesNeededToken?30:0) + aiNobleColorValue(player,c)*3;
-      };
-      return value(a)-value(b) || player.tokens[b]-player.tokens[a];
-    });
-    const color = candidates[0];
-    player.tokens[color]--;
-    S.tokens[color]++;
-    discarded[color]++;
-  }
-  logMsg(`${player.name} 弃置了 ${costText(discarded)}`);
+  const dropped = aiKernelDiscard();
+  logMsg(`${player.name} 弃置了 ${costText(dropped)}`);
   S.phase = "action";
   S.gemSel = emptyGemSelection();
   finishTurn();
 }
-function aiTakeAction(){
-  const player = cp();
-  const purchase = aiPurchaseOptions(player)[0];
-  if(purchase){
-    buyCard(purchase.card,purchase.fromReserved,purchase.level);
-    return;
-  }
+/* ─────────────────── 前瞻内核:公开信息视图 + 抽样推演 ─────────────────── */
+/*
+ * 所有档位唯一的决策通路,要点:
+ *  1. 视图层 aiBaseView() 只读取「公开信息」:牌桌、各家宝石/折扣/分数/已买卡、
+ *     牌库剩余「数量」、贵族池。绝不读取 S.decks 的顺序,也绝不读取对手 p.reserved 的内容
+ *     (对手的预留通过公开数量反推,只保留张数 hiddenRes)。
+ *  2. 未知牌用 determinization:对「牌库 ∪ 对手预留」这个公开可推算的牌的多重集做随机切分,
+ *     每次抽样都给牌库一个合法的具体顺序,多次抽样取平均。
+ *  3. 估值统一到「分等价」量纲:simScore = 分数 + 离 15 分的距离(play/race) + 折扣资产
+ *     + 贵族可达性 + 金币时间价值 - 冗余宝石 - 阻断成本 - 回合机会成本。
+ *  4. 决策 = samples 次抽样 × 全动作枚举(含单拿宝石、牌库盲留)× 1-ply 对手应手。
+ *  档位之间只差上面那组旋钮,所以任何一次改动都能用 tools/selfplay.js matrix 量化验证。
+ */
+const AI_END_pts = 15;
 
-  const target = aiTargetOptions(player)[0] || null;
-  const reservation = aiChooseReservation(player);
-  if(reservation){
-    reserveCard(reservation.card,reservation.level);
-    return;
-  }
+function aiRand(v){ v.seed = (v.seed*1664525 + 1013904223) >>> 0; return v.seed/4294967296; }
+/* 卡片签名:同 level 下签名相同即视为同一张(牌库里存在完全相同的复制品) */
+function aiSig(c){ return c.color+"|"+c.pts+"|"+COLORS.map(x=>c.cost[x]||0).join("."); }
+function aiTotalTok(p){ return COLORS.reduce((s,c)=>s+p.tokens[c],0) + p.tokens.O; }
+function aiSelKey(sel){ return COLORS.map(c=>sel[c]||0).join(","); }
 
-  const selection = aiChooseGemSelection(player,target);
-  if(COLORS.some(c=>selection[c]>0)){
-    S.gemSel = selection;
-    takeGems();
-    return;
-  }
+/* —— 视图:仅公开信息 —— */
+function aiBaseView(){
+  const me = S.cur, n = S.players.length;
+  const visibleAt = {1:new Map(),2:new Map(),3:new Map()};
+  const add = c => {
+    const m = visibleAt[c.lv], k = aiSig(c);
+    m.set(k, (m.get(k)||0)+1);
+  };
+  for(const lv of [1,2,3]) S.board[lv].forEach(add);
+  S.players.forEach(p=>p.purchased.forEach(add));
+  S.players.forEach((p,i)=>{ if(i===me) p.reserved.forEach(add); });   /* 只算自己的预留 */
 
-  const fallback = [1,2,3].flatMap(lv=>S.board[lv].map(card=>({card,level:lv})))[0];
-  if(player.reserved.length<3 && fallback){
-    reserveCard(fallback.card,fallback.level);
-    return;
+  /* 未现身的所有牌 = 整副 - 已现身的多重集;其中一部分在对手手里(内容未知) */
+  const pool = {1:[],2:[],3:[]}, deckLen = {1:0,2:0,3:0};
+  for(const lv of [1,2,3]){
+    const left = new Map(visibleAt[lv]);
+    for(const c of DECK_DATA[lv]){
+      const k = aiSig(c), r = left.get(k)||0;
+      if(r>0) left.set(k, r-1); else pool[lv].push(c);
+    }
+    deckLen[lv] = S.decks[lv].length;      /* 牌库余数是公开信息 */
   }
-  logMsg(`${player.name} 无可执行动作,跳过回合`);
-  nextTurn();
+  return {
+    me, n, endTriggeredBy:S.endTriggeredBy, seed:(Date.now()^0x9e3779b9)>>>0,
+    tokens:{...S.tokens},
+    board:{1:S.board[1].slice(),2:S.board[2].slice(),3:S.board[3].slice()},
+    deckLen, pool,
+    deck:{1:[],2:[],3:[]},
+    nobles:S.nobles.map(x=>({
+      cost:x.cost,
+      taken:x.taken===null ? null : S.players.findIndex(p=>p.name===x.taken),
+    })),
+    players:S.players.map((p,i)=>({
+      tokens:{...p.tokens}, bonus:{...p.bonus}, pts:p.pts, cards:p.cards,
+      reserved:i===me ? p.reserved.slice() : [],
+      hiddenRes:i===me ? 0 : p.reserved.length,
+      nobles:[], isAI:Boolean(p.isAI),
+    })),
+  };
 }
+function aiViewClone(v){
+  return {
+    me:v.me, n:v.n, endTriggeredBy:v.endTriggeredBy, seed:v.seed,
+    tokens:{...v.tokens},
+    board:{1:v.board[1].slice(),2:v.board[2].slice(),3:v.board[3].slice()},
+    deckLen:v.deckLen, pool:v.pool,
+    deck:{1:v.deck[1].slice(),2:v.deck[2].slice(),3:v.deck[3].slice()},
+    nobles:v.nobles.map(x=>({cost:x.cost, taken:x.taken})),
+    players:v.players.map(p=>({
+      tokens:{...p.tokens}, bonus:{...p.bonus}, pts:p.pts, cards:p.cards,
+      reserved:p.reserved.slice(), hiddenRes:p.hiddenRes, nobles:p.nobles.slice(), isAI:p.isAI,
+    })),
+  };
+}
+/* 把「未现身的牌」随机切成 牌库 + 对手预留 两部分(同一份抽样内保持一致) */
+function aiDeterminize(v){
+  for(const lv of [1,2,3]){
+    const cards = v.pool[lv].slice();
+    for(let i=cards.length-1;i>0;i--){
+      const j = Math.floor(aiRand(v)*(i+1));
+      const t=cards[i]; cards[i]=cards[j]; cards[j]=t;
+    }
+    /* 前 deckLen 张进牌库;其余落在对手手里,前瞻中不会再回到牌桌 */
+    v.deck[lv] = cards.slice(0, v.deckLen[lv]);
+  }
+}
+
+/* —— 模拟动作 —— */
+function aiRefill(v,lv){ if(v.board[lv].length<4 && v.deck[lv].length) v.board[lv].push(v.deck[lv].pop()); }
+function aiEndTrigger(v,pi){ if(v.endTriggeredBy<0 && v.players[pi].pts>=AI_END_pts) v.endTriggeredBy=pi; }
+function aiNobleDeny(v,pi,noble){
+  let s=0;
+  v.players.forEach((op,i)=>{
+    if(i===pi) return;
+    const gap = COLORS.reduce((a,c)=>a+Math.max(0,(noble.cost[c]||0)-op.bonus[c]),0);
+    s += 3/(gap+1);
+  });
+  return s;
+}
+function aiSimNobles(v,pi){
+  const p=v.players[pi];
+  for(let guard=0; guard<3; guard++){
+    const open = v.nobles.filter(x=>x.taken===null && COLORS.every(c=>p.bonus[c]>=(x.cost[c]||0)));
+    if(!open.length) return;
+    let best=open[0], bs=-Infinity;
+    open.forEach(x=>{ const s=aiNobleDeny(v,pi,x); if(s>bs){ bs=s; best=x; } });
+    best.taken = pi; p.pts += 3; p.nobles.push(best);
+    aiEndTrigger(v,pi);
+  }
+}
+function aiSimBuy(v,pi,card,fromRes){
+  const p=v.players[pi];
+  const pay = costFor(p, card);
+  for(const c of COLORS){ p.tokens[c]-=pay[c]; v.tokens[c]+=pay[c]; }
+  p.tokens.O-=pay.O; v.tokens.O+=pay.O;
+  p.bonus[card.color]++; p.cards++; p.pts+=card.pts;
+  if(fromRes){
+    const k=p.reserved.indexOf(card); if(k>=0) p.reserved.splice(k,1);
+  }else{
+    const b=v.board[card.lv], k=b.indexOf(card);
+    if(k>=0) b.splice(k,1);
+    aiRefill(v,card.lv);
+  }
+  aiSimNobles(v,pi);
+  aiEndTrigger(v,pi);
+}
+function aiSimReserve(v,pi,card,lv){
+  const p=v.players[pi];
+  if(p.reserved.length>=3) return;
+  let got;
+  if(card){
+    const b=v.board[lv], k=b.indexOf(card);
+    if(k>=0) b.splice(k,1);
+    got=card; aiRefill(v,lv);
+  }else{
+    if(!v.deck[lv].length) return;
+    got=v.deck[lv].pop();
+  }
+  p.reserved.push(got);
+  if(v.tokens.O>0){ v.tokens.O--; p.tokens.O++; }
+}
+function aiSimTake(v,pi,sel){
+  const p=v.players[pi];
+  for(const c of COLORS){
+    const k=Math.min(sel[c]||0, v.tokens[c]);
+    v.tokens[c]-=k; p.tokens[c]+=k;
+  }
+  aiSimDiscard(v,pi);
+}
+function aiSimDiscard(v,pi){
+  const p=v.players[pi];
+  for(let guard=0; aiTotalTok(p)>10 && guard<12; guard++){
+    let worst=null, ws=Infinity;
+    [...COLORS,GOLD].forEach(c=>{
+      if(p.tokens[c]<=0) return;
+      const val = aiTokenKeepValue(v,pi,c);
+      if(val<ws){ ws=val; worst=c; }
+    });
+    if(worst===null) return;
+    p.tokens[worst]--; v.tokens[worst]++;
+  }
+}
+
+/* —— 子评估函数 —— */
+function aiNobleColorValueView(v,pi,color){
+  const p=v.players[pi];
+  let s=0;
+  v.nobles.forEach(x=>{
+    if(x.taken!==null) return;
+    if(!x.cost[color] || p.bonus[color]>=(x.cost[color]||0)) return;
+    const gap = COLORS.reduce((a,c)=>a+Math.max(0,(x.cost[c]||0)-p.bonus[c]),0);
+    s += 1 + 3/(gap+1);
+  });
+  return s;
+}
+/* 单个宝石对该玩家当前目标的边际价值(用于剪枝、选宝石、弃牌) */
+function aiTokenKeepValue(v,pi,color){
+  if(color===GOLD) return 7;                        /* 金币万能,最后才弃 */
+  const p=v.players[pi];
+  let s = aiNobleColorValueView(v,pi,color)*1.1;
+  const watch = p.reserved.concat(v.board[1],v.board[2],v.board[3]);
+  watch.forEach(c=>{
+    const gap = Math.max(0,(c.cost[color]||0)-p.bonus[color]-p.tokens[color]);
+    if(gap<=0) return;
+    const tot = COLORS.reduce((a,x)=>a+Math.max(0,(c.cost[x]||0)-p.bonus[x]-p.tokens[x]),0);
+    if(tot<=3) s += (c.pts+0.5)*(3-tot)*0.45;
+  });
+  s -= Math.max(0, p.tokens[color]-3)*0.55;         /* 同色囤积边际递减 */
+  return s;
+}
+function aiDiscountAsset(v,pi){
+  const p=v.players[pi];
+  let s=0;
+  COLORS.forEach(c=>{ const b=p.bonus[c]; if(b>0) s += b + Math.max(0,b-3)*0.6; });
+  return s;
+}
+function aiNobleCloseness(v,pi){
+  const p=v.players[pi];
+  let s=0;
+  v.nobles.forEach(x=>{
+    if(x.taken!==null) return;
+    const gap = COLORS.reduce((a,c)=>a+Math.max(0,(x.cost[c]||0)-p.bonus[c]),0);
+    s += gap===0 ? 3 : 3*Math.exp(-gap/2.5);
+  });
+  return s;
+}
+function aiTokenSurplus(v,pi){
+  const p=v.players[pi];
+  let s=0;
+  COLORS.forEach(c=>{ s += Math.max(0, p.tokens[c]-4)*0.7; });
+  const total = aiTotalTok(p);
+  s += Math.max(0,total-10)*1.2 + Math.max(0,total-7)*0.12;
+  return s;
+}
+/* 我把这张卡从市场上摘走,对手损失的期望分 */
+function aiOpponentThreatGain(v,pi,card){
+  let g=0;
+  v.players.forEach((op,i)=>{
+    if(i===pi) return;
+    const need = COLORS.reduce((a,c)=>a+Math.max(0,(card.cost[c]||0)-op.bonus[c]-op.tokens[c]),0);
+    const eff = need - Math.min(need, op.tokens.O);
+    if(eff<=0) g += card.pts + 1.2;
+    else if(eff<=2 && card.pts>=2) g += card.pts*0.6;
+    else g += Math.max(0,card.pts-0.5)*0.2/(1+eff);
+  });
+  return card.pts>=3 ? g*1.3 : g;
+}
+/* 折扣引擎价值:这张卡的色彩能替未来省下多少现金
+   (按在售/已预定卡在该色上的缺口累计;高手会为此买 0 分卡) */
+function aiBonusLift(lists,color,bonus){
+  let s=0;
+  lists.forEach(list=>list.forEach(c=>{
+    if(c.color!==color) return;
+    const need=(c.cost[color]||0)-(bonus[color]||0);
+    if(need>0) s += Math.min(need,2)*0.3;
+  }));
+  return s;
+}
+/* 距离最近的开放贵族在该色上还差几层折扣(贵族只认折扣,不认散宝石) */
+function aiNobleNeed(v,pi,color){
+  const p=v.players[pi];
+  let g=0;
+  v.nobles.forEach(x=>{
+    if(x.taken!==null) return;
+    const gap = COLORS.reduce((a,c)=>a+Math.max(0,(x.cost[c]||0)-p.bonus[c]),0);
+    if(gap<=4) g = Math.max(g, Math.max(0,(x.cost[color]||0)-p.bonus[color]));
+  });
+  return g;
+}
+/* 贪心估算:该玩家还要几个回合到 15 分(越小越危险) */
+function aiRaceTurns(v,pi){
+  const p=v.players[pi];
+  const tok={...p.tokens}, bonus={...p.bonus}, bank={...v.tokens};
+  const board={1:v.board[1].slice(),2:v.board[2].slice(),3:v.board[3].slice()};
+  const deck ={1:v.deck[1].slice(),2:v.deck[2].slice(),3:v.deck[3].slice()};
+  const res  = p.reserved.slice();
+  const fake = {tokens:tok, bonus};
+  const lists = [res,board[1],board[2],board[3]];
+  /* 贵族状态用本地覆盖集合模拟,绝不写回 v.nobles(共享对象) */
+  const nTaken = new Set(); v.nobles.forEach(x=>{ if(x.taken!==null) nTaken.add(x); });
+  const gapOf = c => COLORS.reduce((a,x)=>a+Math.max(0,(c.cost[x]||0)-bonus[x]-tok[x]),0);
+  const drop  = (c,fromRes)=>{
+    if(fromRes){ const k=res.indexOf(c); if(k>=0) res.splice(k,1); return; }
+    const b=board[c.lv], k=b.indexOf(c);
+    if(k>=0) b.splice(k,1);
+    aiSimRefillLocal(board,deck,c.lv);
+  };
+  let pts=p.pts, turns=0;
+  for(let guard=0; guard<20 && pts<AI_END_pts; guard++){
+    /* 1) 先买当下就买得起、且真正有价值的卡(0 分卡只在缺该色折扣时才碰) */
+    let buy=null, bs=-Infinity;
+    const scanBuy=(list,fromRes)=>list.forEach(c=>{
+      if(c.pts<=0 && bonus[c.color]>=2) return;
+      const gap = gapOf(c);
+      if(gap > tok.O) return;                       /* 买不起 */
+      const sc = c.pts*1.5 + c.lv*0.5 + (c.pts>0?2:0) + (fromRes?0.4:0)
+        + aiBonusLift(lists,c.color,bonus);
+      if(sc>bs){ bs=sc; buy={card:c,fromRes}; }
+    });
+    scanBuy(res,true);
+    for(const lv of [1,2,3]) scanBuy(board[lv],false);
+    if(buy){
+      const c=buy.card, pay=costFor(fake,c);
+      for(const x of COLORS){ tok[x]-=pay[x]; bank[x]+=pay[x]; }
+      tok.O-=pay.O; bank.O+=pay.O;
+      bonus[c.color]++; pts+=c.pts; turns++;
+      drop(c,buy.fromRes);
+      /* 贵族是白送的 3 分:漏记会让 4-4-4 这类路线在模型里永远 0 进度 */
+      v.nobles.forEach(x=>{
+        if(nTaken.has(x)) return;
+        if(COLORS.every(k=>bonus[k]>=(x.cost[k]||0))){ nTaken.add(x); pts+=3; }
+      });
+      continue;
+    }
+    /* 2) 买不起 → 锁定性价比最高的正分目标,按合法规则拿一轮宝石 */
+    let tgt=null, tev=Infinity, tval=-Infinity;
+    const scanTgt=(list)=>list.forEach(c=>{
+      if(c.pts<=0) return;
+      const gap = gapOf(c), eff = gap - Math.min(gap, tok.O);
+      if(eff<=0) return;
+      const val = (c.pts*2 + c.lv*0.8)/(1+eff);
+      if(val>tval || (val===tval && eff<tev)){ tval=val; tev=eff; tgt=c; }
+    });
+    scanTgt(res);
+    for(const lv of [1,2,3]) scanTgt(board[lv]);
+    if(!tgt) break;
+    const need={};
+    COLORS.forEach(x=>{ need[x]=Math.max(0,(tgt.cost[x]||0)-bonus[x]-tok[x]); });
+    const order=COLORS.filter(x=>need[x]>0).sort((a,b)=>need[b]-need[a] || bank[b]-bank[a]);
+    let took=0;
+    const give=(x,k)=>{ bank[x]-=k; tok[x]+=k; need[x]-=k; took+=k; };
+    for(const x of order){ if(need[x]>=2 && bank[x]>=4){ give(x,2); break; } }   /* 2 同色 */
+    if(took===0){                                                                /* ≤3 异色 */
+      const picked=new Set();
+      for(const x of order){
+        if(picked.size>=3) break;
+        if(need[x]>0 && bank[x]>0){ give(x,1); picked.add(x); }
+      }
+    }
+    if(took===0) break;                                                          /* 市场已空 */
+    turns++;
+  }
+  const luck = pi===v.me ? 0 : p.hiddenRes*0.35;     /* 对手暗牌带来的运气折减 */
+  return turns + Math.max(0,AI_END_pts-pts)*0.6 - luck;
+}
+function aiSimRefillLocal(board,deck,lv){
+  if(board[lv].length<4 && deck[lv].length) board[lv].push(deck[lv].pop());
+}
+function aiTurnsLeft(v){
+  if(v.endTriggeredBy<0) return 99;
+  return ((v.endTriggeredBy - v.me + v.n) % v.n) + 1;
+}
+/* 「回合机会成本」:race 模型对每类动作都假设完美转化,
+   但只有买卡是把分数落袋,拿宝石/预定都是纸面进度 → 按回合数折价 */
+function aiTempoCost(a,prof){
+  const w=(prof&&prof.w)||{};
+  if(a.kind==="buy") return 0;
+  if(a.kind==="res") return w.tempoRes!==undefined ? w.tempoRes : 1.1;
+  if(a.kind==="resdeck") return w.tempoDeck!==undefined ? w.tempoDeck : 2.2;
+  return w.tempoGems!==undefined ? w.tempoGems : 0.6;
+}
+/* ── 轮流贪心推演:双方在同一个市场上交替行动到 15 分,直接估计「谁先撞线」 ── */
+function aiPlayoutStep(v,pi){
+  const p=v.players[pi];
+  const lists=[p.reserved, v.board[1], v.board[2], v.board[3]];
+  let best=null, bs=-Infinity;
+  const scan=(list,fromRes)=>list.forEach(c=>{
+    if(!canAfford(p,c)) return;
+    if(c.pts<=0 && p.bonus[c.color]>=3) return;
+    const sc = c.pts*3 + c.lv*1.5 + (fromRes?0.3:0) + (p.bonus[c.color]<2?0.8:0)
+      + aiBonusLift(lists,c.color,p.bonus);
+    if(sc>bs){ bs=sc; best={card:c,fromRes}; }
+  });
+  scan(p.reserved,true);
+  for(const lv of [1,2,3]) scan(v.board[lv],false);
+  if(best){ aiSimBuy(v,pi,best.card,best.fromRes); return; }
+  let tgt=null, tv=-Infinity;
+  const scanT=(list)=>list.forEach(c=>{
+    if(c.pts<=0) return;
+    const gap = COLORS.reduce((a,x)=>a+Math.max(0,(c.cost[x]||0)-p.bonus[x]-p.tokens[x]),0);
+    const val=(c.pts*2+c.lv*0.8)/(1+gap);
+    if(val>tv){ tv=val; tgt=c; }
+  });
+  scanT(p.reserved);
+  for(const lv of [1,2,3]) scanT(v.board[lv]);
+  const need={};
+  COLORS.forEach(x=>{
+    const cardGap = tgt ? Math.max(0,(tgt.cost[x]||0)-p.bonus[x]-p.tokens[x]) : 0;
+    /* 贵族路线也要靠散宝石以外的折扣堆出来,否则推演里永远看不到 4-4-4 */
+    need[x]= cardGap + aiNobleNeed(v,pi,x)*0.6;
+  });
+  const order=COLORS.slice().sort((a,b)=>need[b]-need[a] || v.tokens[b]-v.tokens[a]);
+  const sel=emptyGemSelection();
+  let took=0;
+  for(const x of order){ if(need[x]>=2 && v.tokens[x]>=4){ sel[x]=2; took=2; break; } }
+  if(took===0) for(const x of order){ if(took>=3) break; if(v.tokens[x]>0){ sel[x]++; took++; } }
+  aiSimTake(v,pi,sel);
+}
+function aiPlayout(v,pi,rounds){
+  const g=aiViewClone(v);
+  const ops=[]; g.players.forEach((o,i)=>{ if(i!==pi) ops.push(i); });
+  const maxOf = () => Math.max(...ops.map(i=>g.players[i].pts));
+  const myPts = () => g.players[pi].pts;
+  for(let r=0; r<(rounds||10); r++){
+    aiPlayoutStep(g,pi);
+    if(myPts()>=AI_END_pts) return AI_END_pts + Math.max(0, AI_END_pts - maxOf());
+    for(const oi of ops){
+      aiPlayoutStep(g,oi);
+      if(g.players[oi].pts>=AI_END_pts) return -(AI_END_pts + Math.max(0, AI_END_pts - myPts()));
+    }
+  }
+  return myPts() - maxOf();
+}
+function simScore(v,pi,prof,block,tempo){
+  const w=prof.w, p=v.players[pi];
+  const endgame = aiTurnsLeft(v)<=3;
+  let s = p.pts * (endgame?w.ptsEnd:w.pts);
+  if(p.pts>=AI_END_pts) s += 12;
+  if(w.play){
+    s += aiPlayout(v,pi,w.rounds||10) * w.play;
+  }else if(w.race){
+    const mine = aiRaceTurns(v,pi);
+    let threat = 99;
+    v.players.forEach((o,i)=>{ if(i!==pi) threat = Math.min(threat, aiRaceTurns(v,i)); });
+    s += (threat - mine) * w.race * (endgame?0.5:1);
+  }
+  s += aiDiscountAsset(v,pi) * w.discount;
+  s += aiNobleCloseness(v,pi) * w.noble;
+  s += p.tokens.O * (endgame?w.goldEnd:w.gold) * 0.6;
+  s -= aiTokenSurplus(v,pi) * w.surplus;
+  if(block) s -= block * (endgame?w.blockEnd:w.block);
+  if(tempo) s -= tempo * (w.race||1) * (endgame?1.4:1);
+  return s;
+}
+
+/* —— 动作空间(比旧 AI 完整:含单拿宝石与牌库盲留) —— */
+function aiGemCombos(v,pi){
+  const legal=[];
+  const build=arr=>{ const sel=emptyGemSelection(); arr.forEach(c=>sel[c]++); return sel; };
+  const u=arr=>arr.reduce((s,c)=>s+aiTokenKeepValue(v,pi,c),0);
+  for(let i=0;i<COLORS.length;i++)
+    for(let j=i+1;j<COLORS.length;j++)
+      for(let k=j+1;k<COLORS.length;k++){
+        const a=COLORS[i],b=COLORS[j],c=COLORS[k];
+        if(v.tokens[a]&&v.tokens[b]&&v.tokens[c]) legal.push({sel:build([a,b,c]), val:u([a,b,c])+0.6});
+      }
+  COLORS.forEach(c=>{ if(v.tokens[c]>=4) legal.push({sel:build([c,c]), val:aiTokenKeepValue(v,pi,c)*1.8}); });
+  for(let i=0;i<COLORS.length;i++)
+    for(let j=i+1;j<COLORS.length;j++)
+      if(v.tokens[COLORS[i]]&&v.tokens[COLORS[j]])
+        legal.push({sel:build([COLORS[i],COLORS[j]]), val:u([COLORS[i],COLORS[j]])*0.8});
+  COLORS.forEach(c=>{ if(v.tokens[c]) legal.push({sel:build([c]), val:aiTokenKeepValue(v,pi,c)*0.7}); });
+  legal.sort((a,b)=>b.val-a.val);
+  const out=[], seen=new Set();
+  for(const x of legal){
+    const k=aiSelKey(x.sel);
+    if(seen.has(k)) continue;
+    seen.add(k); out.push(x.sel);
+    if(out.length>=8) break;
+  }
+  return out;
+}
+function aiKernelActions(v){
+  const pi=v.me, p=v.players[pi], acts=[];
+  const room = p.reserved.length<3;
+  p.reserved.forEach(c=>{ if(canAfford(p,c)) acts.push({kind:"buy", card:c, fromRes:true, level:c.lv}); });
+  for(const lv of [1,2,3]){
+    v.board[lv].forEach(c=>{
+      if(canAfford(p,c)) acts.push({kind:"buy", card:c, fromRes:false, level:lv});
+      if(room) acts.push({kind:"res", card:c, fromRes:false, level:lv});
+    });
+    if(room && v.deck[lv].length) acts.push({kind:"resdeck", card:null, level:lv});
+  }
+  aiGemCombos(v,pi).forEach(sel=>acts.push({kind:"gems", sel}));
+  acts.forEach(a=>{
+    a.block = a.card ? aiOpponentThreatGain(v,pi,a.card) : 0;
+    a.key = a.kind==="buy"   ? "buy|"+(a.fromRes?"r"+p.reserved.indexOf(a.card):"b"+a.level+"|"+v.board[a.level].indexOf(a.card))
+          : a.kind==="res"   ? "res|b"+a.level+"|"+v.board[a.level].indexOf(a.card)
+          : a.kind==="resdeck" ? "res|d"+a.level
+          : "gem|"+aiSelKey(a.sel);
+  });
+  return acts;
+}
+function aiCheapScore(v,pi,a){
+  const p=v.players[pi];
+  if(a.kind==="buy"){
+    const need = COLORS.reduce((s,c)=>s+Math.max(0,(a.card.cost[c]||0)-p.bonus[c]-p.tokens[c]),0);
+    const eff  = need - Math.min(need, p.tokens.O);
+    return a.card.pts*3 + a.card.lv*1.5 - eff*1.2 + (a.fromRes?0.5:0);
+  }
+  if(a.kind==="res")  return a.card.pts*1.6 + a.card.lv + a.block*1.1
+    - COLORS.reduce((s,c)=>s+Math.max(0,(a.card.cost[c]||0)-p.bonus[c]-p.tokens[c]),0)*0.5;
+  if(a.kind==="resdeck") return 0.2;
+  return COLORS.reduce((s,c)=>s+(a.sel[c]||0)*aiTokenKeepValue(v,pi,c),0);
+}
+function aiApply(v,pi,a){
+  if(a.kind==="buy") aiSimBuy(v,pi,a.card,a.fromRes);
+  else if(a.kind==="res") aiSimReserve(v,pi,a.card,a.level);
+  else if(a.kind==="resdeck") aiSimReserve(v,pi,null,a.level);
+  else aiSimTake(v,pi,a.sel);
+}
+/* 对手 1-ply 应手:oppPolicy="greedy" 只看眼前性价比;
+   "play" 借用推演政策(会算折扣引擎与贵族),master 用它预判高手对手 */
+function aiOpponentStep(v,oi){
+  if(aiProfile().oppPolicy === "play"){ aiPlayoutStep(v,oi); return; }
+  const op=v.players[oi];
+  let best=null, bs=-Infinity;
+  for(const lv of [1,2,3]) v.board[lv].forEach(c=>{
+    if(!canAfford(op,c)) return;
+    const sc = c.pts*3 + c.lv*2;
+    if(sc>bs){ bs=sc; best=c; }
+  });
+  if(best){ aiSimBuy(v,oi,best,false); return; }
+  const sel = aiGemCombos(v,oi)[0] || emptyGemSelection();
+  aiSimTake(v,oi,sel);
+}
+function aiKernelDecide(){
+  const prof=aiProfile(), base=aiBaseView();
+  const root=aiViewClone(base); aiDeterminize(root);
+  const acts=aiKernelActions(root);
+  if(!acts.length) return null;
+  acts.forEach(a=>{ a.cheap = aiCheapScore(root,root.me,a); });
+  /* 分桶剪枝:保证每一类动作都有代表,不让「拿宝石」挤光「买卡」 */
+  const QUOTA = prof.quota || {buy:5,res:3,resdeck:1,gems:3};
+  const cap=Math.max(2, prof.kFollow||8);
+  const buckets={buy:[],res:[],resdeck:[],gems:[]};
+  acts.forEach(a=>{ (buckets[a.kind]||(buckets[a.kind]=[])).push(a); });
+  Object.values(buckets).forEach(list=>list.sort((a,b)=>b.cheap-a.cheap));
+  const ranked=[], rest=[];
+  for(const kind of ["buy","res","resdeck","gems"]){
+    const list=buckets[kind]||[];
+    ranked.push(...list.slice(0, QUOTA[kind]||1));
+    rest.push(...list.slice(QUOTA[kind]||1));
+  }
+  if(ranked.length<cap){ rest.sort((a,b)=>b.cheap-a.cheap); ranked.push(...rest.slice(0, cap-ranked.length)); }
+  const agg = new Map();
+  for(let s=0;s<(prof.samples||1);s++){
+    const v = aiViewClone(root);
+    v.seed = (root.seed + s*7919 + 17) >>> 0;
+    aiDeterminize(v);
+    const left = aiTurnsLeft(v);
+    for(const a of ranked){
+      const tp = aiTempoCost(a, prof);
+      const c = aiViewClone(v);
+      aiApply(c, c.me, a);
+      const after = simScore(c, c.me, prof, a.block, tp);
+      let val = after;
+      const lam = prof.lookahead !== undefined ? prof.lookahead : 0.6;
+      /* 终局只剩自己一步时,前瞻没有意义 → 跳过;lam=0 时同样直接省掉整次克隆 */
+      if(lam>0 && left>2 && c.endTriggeredBy<0){
+        const nx = (c.me+1) % c.n;
+        const c2 = aiViewClone(c);
+        aiOpponentStep(c2, nx);
+        const le = lam * (a.kind==="gems" ? 0.7 : 1);
+        val = after*(1-le) + simScore(c2, c2.me, prof, a.block, tp)*le;
+      }
+      const cur = agg.get(a.key);
+      if(cur){ cur.t+=val; cur.k++; } else agg.set(a.key, {t:val, k:1, a});
+    }
+  }
+  const scored=[];
+  agg.forEach(x=>scored.push({m:x.t/x.k, a:x.a}));
+  scored.sort((x,y)=>y.m-x.m);
+  /* epsilon:在 Top-3 内按 softmax(分差 / (eps×分差离散度)) 抽样。
+     eps=0 → 严格 argmax;eps 越大越"手软",这是低档位唯一的犯错来源。 */
+  const eps = prof.epsilon || 0;
+  if(eps<=0 || scored.length<2) return scored[0].a;
+  const top = scored.slice(0,3);
+  const spread = top.reduce((s,x)=>s+Math.abs(x.m-top[0].m),0)/top.length;
+  const T = Math.max(1e-6, eps*(spread + Math.abs(top[0].m)*0.1));
+  let total=0;
+  top.forEach(x=>{ x.p = Math.exp((x.m-top[0].m)/T); total += x.p; });
+  let r = aiRand(root)*total;
+  for(const x of top){ r -= x.p; if(r<=0) return x.a; }
+  return top[top.length-1].a;
+}
+function aiKernelAct(){
+  const p=cp();
+  const a = aiKernelDecide();
+  if(!a){ logMsg(`${p.name} 无可执行动作,跳过回合`); nextTurn(); return; }
+  if(a.kind==="buy") buyCard(a.card, a.fromRes, a.level);
+  else if(a.kind==="res") reserveCard(a.card, a.level);
+  else if(a.kind==="resdeck") reserveCard(null, a.level);
+  else { S.gemSel = a.sel; takeGems(); }
+}
+function aiKernelDiscard(){
+  const p=cp(), v=aiBaseView(), pv=v.players[v.me];
+  const discarded=emptyGemSelection();
+  while(aiTotalTok(pv)>10){
+    let worst=null, ws=Infinity;
+    [...COLORS,GOLD].forEach(c=>{
+      if(pv.tokens[c]<=0) return;
+      const val=aiTokenKeepValue(v,v.me,c);
+      if(val<ws){ ws=val; worst=c; }
+    });
+    if(worst===null) break;
+    pv.tokens[worst]--; v.tokens[worst]++;
+    p.tokens[worst]--; S.tokens[worst]++;
+    discarded[worst]++;
+  }
+  return discarded;
+}
+/* 多贵族来访时择优:分值都是 +3,取「最能卡住对手」的那位 */
+function aiPickNoble(player, eligible){
+  if(eligible.length<2) return eligible[0];
+  let best=eligible[0], bs=-Infinity;
+  eligible.forEach(n=>{
+    let s=0;
+    S.players.forEach(op=>{
+      if(op===player) return;
+      const gap = COLORS.reduce((a,c)=>a+Math.max(0,(n.cost[c]||0)-op.bonus[c]),0);
+      s += 3/(gap+1);
+    });
+    if(s>bs){ bs=s; best=n; }
+  });
+  return best;
+}
+
+function aiTakeAction(){ aiKernelAct(); }
 function runAITurn(){
   aiTimer = null;
   if(!isAITurn()) return;
@@ -1579,6 +2075,17 @@ function buyCard(card, fromReserved, levelIdx){
   }
 }
 
+/* 动画收尾兜底:onfinish 是「回合交接」的唯一推进路径(→ afterAction → finishTurn → 下一位),
+   但标签页被冻结、webview 省电、无合成环境等情况下 Web Animations 的时间轴可能永不推进,
+   onfinish 不触发就会表现成「AI 永远不思考」的假死。这里把收尾包成「最多执行一次」,
+   并挂一个比动画时长更长的定时器:谁先到谁负责清理,后到的那个是空操作。 */
+function guardedDone(done, ms){
+  let fired = false;
+  const settle = ()=>{ if(fired) return; fired = true; done(); };
+  setTimeout(settle, ms);
+  return settle;
+}
+
 /* 卡牌飞行动画:克隆卡牌从源位置滑入目标位置 */
 function flyCardAnimate(flyer, sourceRect, findTarget, done){
   render();
@@ -1591,15 +2098,16 @@ function flyCardAnimate(flyer, sourceRect, findTarget, done){
   const dx = (tgtRect.left+tgtRect.width/2)-(sourceRect.left+sourceRect.width/2);
   const dy = (tgtRect.top+tgtRect.height/2)-(sourceRect.top+sourceRect.height/2);
   const scale = tgtRect.width / sourceRect.width;
+  const settle = guardedDone(()=>{
+    flyer.remove();
+    targetEl.style.visibility = '';
+    done();
+  }, 560 + 600);
   flyer.animate([
     {transform:'translate(0,0) scale(1)', opacity:1},
     {transform:`translate(${dx}px,${dy}px) scale(${scale})`, opacity:1, offset:.82},
     {transform:`translate(${dx}px,${dy}px) scale(${scale})`, opacity:0}
-  ], {duration:560, easing:'cubic-bezier(.4,0,.2,1)'}).onfinish = ()=>{
-    flyer.remove();
-    targetEl.style.visibility = '';
-    done();
-  };
+  ], {duration:560, easing:'cubic-bezier(.4,0,.2,1)'}).onfinish = settle;
 }
 
 /* 拿宝石飞行动画:克隆宝石从宝石库滑入玩家面板 */
@@ -1619,15 +2127,16 @@ function flyGemsToPlayer(flyers, done){
     const dx = (tgtRect.left+tgtRect.width/2)-(sourceRect.left+sourceRect.width/2);
     const dy = (tgtRect.top+tgtRect.height/2)-(sourceRect.top+sourceRect.height/2);
     const scale = tgtRect.width / sourceRect.width;
+    const settle = guardedDone(()=>{
+      flyer.remove();
+      targetEl.style.visibility = '';
+      finish();
+    }, 440 + idx*90 + 600);
     flyer.animate([
       {transform:'translate(0,0) scale(1)', opacity:1},
       {transform:`translate(${dx}px,${dy}px) scale(${scale})`, opacity:1, offset:.82},
       {transform:`translate(${dx}px,${dy}px) scale(${scale})`, opacity:0}
-    ], {duration:440, delay:idx*90, easing:'cubic-bezier(.4,0,.2,1)'}).onfinish = ()=>{
-      flyer.remove();
-      targetEl.style.visibility = '';
-      finish();
-    };
+    ], {duration:440, delay:idx*90, easing:'cubic-bezier(.4,0,.2,1)'}).onfinish = settle;
   });
 }
 function costText(pay){
@@ -1704,7 +2213,7 @@ function finishTurn(){
     grantNoble(eligible[0]);
   }else if(eligible.length>1){
     if(p.isAI){
-      grantNoble(eligible[0]);
+      grantNoble(aiPickNoble(p, eligible));
       return;
     }
     S.phase = "noble";
@@ -1894,11 +2403,11 @@ function selectCard(sel){
            : turnHintText());
 }
 function turnHintText(){
-  return cp().isAI ? `${cp().name} 正在思考...`
-    : `轮到 ${cp().name}:点宝石库拿宝石,或点卡牌选中后按宝石库右侧的「买 / 留」`;
+  /* 玩家回合不再显示操作提示(玩法说明见开始页),仅 AI 回合保留"正在思考" */
+  return cp().isAI ? `${cp().name} 正在思考...` : "";
 }
 function renderBank(){
-  let html = `<span class="lbl">宝石库(点击选择要拿的宝石,最多 3 个不同色;同色拿 2 个需该色剩 ≥4):</span>`;
+  let html = "";
   for(const c of COLORS){
     const n = S.tokens[c];
     const sel = S.gemSel[c];
