@@ -14,7 +14,16 @@ body{
   background:#171a18; color:#eee; font-family:"Microsoft YaHei",system-ui,sans-serif;
   min-height:100vh; padding:14px;
 }
-h1{font-size:20px; margin-bottom:8px; color:#f0d98c; letter-spacing:2px;}
+/* ═══════ 背景图试做（整块删除即可完全还原） ═══════ */
+body::before{                 /* 背景图层；锚在画面中段（桥与城堡），避开底部高光水面 */
+  content:""; position:fixed; inset:0; z-index:-2;
+  background:url("assets/bakground/bgp5.1.jpeg") center/cover no-repeat;
+  filter:brightness(.78);
+}
+[data-skin="cartoon"] body::before{display:none;}  /* 卡通皮肤保持纯浅底 */
+body.no-bg::before{display:none;}  /* 未勾选"添加背景"时,只显示纯色底 */
+/* ═══════════════ 背景图试做 END ═══════════════ */
+h1{font-size:20px; margin-bottom:8px; color:#f0d98c; letter-spacing:2px; white-space:nowrap; flex-shrink:0;}
 #setup{
   max-width:520px; margin:80px auto; background:#1c2530; border:1px solid #33404f;
   border-radius:12px; padding:28px;
@@ -27,6 +36,12 @@ h1{font-size:20px; margin-bottom:8px; color:#f0d98c; letter-spacing:2px;}
 }
 #setup .setup-hidden{display:none;}
 #setup input:disabled{color:#8a9bb0; cursor:not-allowed;}
+/* 复选框行(如"添加背景"):不套用文本框的整宽样式 */
+#setup label.check{display:flex; align-items:center; gap:8px; margin:16px 0 0; color:#9ab; font-size:15px; cursor:pointer;}
+#setup label.check input{width:18px; height:18px; padding:0; accent-color:#f0d98c; cursor:pointer;}
+/* 设置页显示时,把它在视口中居中;flex + margin:auto 在内容超高时会自动退回顶对齐,不会裁切 */
+body:has(#setup:not([hidden])){display:flex; min-height:100vh;}
+body:has(#setup:not([hidden])) #setup{margin:auto;}
 .btn{
   display:inline-block; padding:8px 18px; border:none; border-radius:8px;
   background:#2e5f8a; color:#fff; cursor:pointer; font-size:14px; margin-top:16px;
@@ -43,7 +58,7 @@ h1{font-size:20px; margin-bottom:8px; color:#f0d98c; letter-spacing:2px;}
 #turnHint{font-size:16px; font-weight:bold; color:#7fd4a0;}
 .topline{display:flex; justify-content:flex-end; align-items:baseline; gap:8px;}
 #roundHint{font-size:14px; font-weight:bold; color:#f0d98c; white-space:nowrap;}
-#log{font-size:12px; color:#8a9bb0; max-height:60px; overflow-y:auto; text-align:right;}
+#log{font-size:12px; color:#c2d2e6; max-height:60px; overflow-y:auto; text-align:right;}
 #log div{line-height:1.6;}
 
 /* 贵族 */
@@ -274,7 +289,7 @@ button.gem:disabled:hover{transform:none;}
   justify-content:center; font-size:13px; font-weight:bold; color:#111;
   border:2px solid rgba(0,0,0,.15); position:relative;
 }
-.card .cost .cost-gem{width:28px; height:28px; font-size:15px;}
+.card .cost .cost-gem{width:28px; height:28px; font-size:19px;}
 
 /* 玩家面板 */
 #players{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; margin-top:16px;}
@@ -599,7 +614,7 @@ button.gem:disabled:hover{transform:none;}
   .card .card-art.art-failed::before{font-size:8px;}
   .card .card-body{flex:0 0 21px; padding:1px 2px;}
   .card .cost{gap:1px; min-height:13px; flex-wrap:nowrap;}
-  .card .cost .cost-gem{width:13px; height:13px; min-width:11px; font-size:9px; border-width:1px;}
+  .card .cost .cost-gem{width:14px; height:14px; min-width:12px; font-size:11px; border-width:1px;}
   .cost-gem.disc::after{font-size:10px;}
   .card.sel,.rmini.sel{outline-width:2px; outline-offset:1px; box-shadow:none; transform:translateY(-2px);}
   .player .rmini.sel{outline-width:2px; box-shadow:none;}
@@ -842,6 +857,7 @@ button.gem:disabled:hover{transform:none;}
     <option value="4">4 人</option>
   </select>
   <div id="nameInputs"></div>
+  <label class="check" for="bgCheck">添加背景<input type="checkbox" id="bgCheck" checked></label>
   <button class="btn gold" id="startBtn" style="width:100%">开始游戏</button>
   <p style="margin-top:14px; font-size:12px; color:#789;">规则:先到 15 分获胜。每回合三选一——拿 3 个不同色宝石 / 拿 2 个同色宝石(该色剩 ≥4)/ 买卡或预留卡。金币可当任意颜色。拥有超过 10 个宝石时须弃至 10 个。买卡获得的宝石色为永久折扣,凑齐贵族要求自动获得贵族(+3 分)。</p>
 </div>
@@ -2318,7 +2334,8 @@ function render(){
 }
 function renderTurn(){
   const aiLabel = cp().isAI ? ` · AI(${aiProfile().label})` : "";
-  $("turnHint").textContent = `第 ${S.cur+1} 位玩家 · ${cp().name}${aiLabel} · ${cp().pts} 分` + (S.endTriggeredBy>=0?` ⏹ 终局轮`:"");
+  //$("turnHint").textContent = `第 ${S.cur+1} 位玩家 · ${cp().name}${aiLabel} · ${cp().pts} 分` + (S.endTriggeredBy>=0?` ⏹ 终局轮`:"");
+  $("turnHint").textContent = `${cp().name}${aiLabel}:${cp().pts} 分` + (S.endTriggeredBy>=0?` ⏹ 终局轮`:"");
 }
 /* 一轮 = 每位玩家各行动一次 */
 function roundNumber(){ return Math.floor(S.turnCount / S.players.length) + 1; }
@@ -2632,6 +2649,10 @@ $("surrenderBtn").onclick = ()=>{
 const modeSelect = $("modeSelect");
 const difficultySelect = $("difficultySelect");
 const pcSelect = $("pcSelect");
+const bgCheck = $("bgCheck");
+// 背景图开关:勾选=有背景,取消勾选立即去掉背景图,开始游戏后保持同一状态
+const applyBg = ()=>document.body.classList.toggle("no-bg", !bgCheck.checked);
+bgCheck.onchange = applyBg;
 function renderNameInputs(){
   const box = $("nameInputs");
   const previous = [...box.querySelectorAll(".pname")].map(input=>input.value);
@@ -2654,7 +2675,7 @@ function renderNameInputs(){
   };
   if(aiMode){
     addField("玩家名字",previous[0]||"玩家1",{player:true});
-    addField("电脑对手","电脑",{disabled:true});
+    addField("电脑对手","电脑",{disabled:false});
     return;
   }
   const n = +pcSelect.value;
