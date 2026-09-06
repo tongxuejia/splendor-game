@@ -849,7 +849,9 @@ button.gem:disabled:hover{transform:none;}
     <option value="normal" selected>标准</option>
     <option value="hard">困难</option>
     <option value="master">大师</option>
+    <option value="grandmaster">宗师</option>
   </select>
+  <p id="difficultyHint" style="margin:6px 0 10px; font-size:12px; line-height:1.6; color:#789;"></p>
   <label id="pcLabel" for="pcSelect">玩家人数(热座,轮流操作同一台电脑)</label>
   <select id="pcSelect">
     <option value="2">2 人</option>
@@ -865,7 +867,7 @@ button.gem:disabled:hover{transform:none;}
 <!-- 游戏主界面 -->
 <div id="game" hidden>
   <div id="topbar">
-    <h1>💎 璀璨宝石1.7</h1>
+    <h1>💎 璀璨宝石1.8</h1>
     <div>
       <div class="topline">
         <div id="turnHint"></div>
@@ -914,7 +916,7 @@ const GOLD   = "O";
 const COLOR_NAME = {W:"白",B:"蓝",G:"绿",R:"红",K:"黑",O:"金"};
 const COLOR_CLASS = c => "g"+c;
 /*
- * 四档共用同一个前瞻内核(aiKernelDecide),难度只用「可量化旋钮」区分,不再各写一套魔法权重。
+ * easy / normal / hard 共用同一个前瞻内核(aiKernelDecide),难度只用「可量化旋钮」区分。
  *   samples   隐藏牌抽样次数(0/1 = 不做 determinization 的平均)
  *   kFollow   进入精算的候选动作宽度
  *   quota     分桶剪枝:每类动作保留几个代表
@@ -922,25 +924,27 @@ const COLOR_CLASS = c => "g"+c;
  *   epsilon   决策噪声,softmax 温度 × 档位内分差(0 = 严格 argmax)
  *   oppPolicy 对手模型:"greedy" 只贪心买卡,"play" 会参与交替推演
  *   w.play / w.rounds  估值里「离 15 分还有多远」:交替贪心推演 aiPlayout(depth=rounds),
- *     normal 6 步 / hard 10 步 / master 12 步;easy 关掉(=只看账面,不会规划)。
+ *     easy 6 步 / normal 10 步 / hard 12 步。
  *   w.race 是同一项的廉价替代(aiRaceTurns 重规划回合数),已出厂档位不用,留作降级对照。
- *   梯度靠「旋钮向量逐项支配」保证:easy < normal < hard < master 在每个旋钮上都不更优,
+ * w 里所有分值都是「分等价」量纲,可直接横向比较,这是各档能拉开梯度的前提。
+ *   梯度靠「旋钮向量逐项支配」保证:easy < normal < hard 在每个旋钮上都不更优,
  *   所以强弱关系是可推理的,不是调出来的巧合。
- * w 里所有分值都是「分等价」量纲,可直接横向比较,这是四档能拉开梯度的前提。
+ * master 是例外:policy:"guide" 让它走独立的「二人局攻略规则引擎」(aiGuideDecide),
+ *   不搜索、不抽样、不建模对手,只按攻略的阶段判定 + 性价比查表 + 卡位/绝杀规则出牌。
+ *   攻略本身是高手打法,所以这一档压在旋钮梯度之上,不参与上面的逐项支配。
+ * grandmaster 走 policy:"strict" —— 同一份攻略的「完整详尽版」:六个优先级层级串成硬瀑布,
+ *   上一层级给出可执行动作就直接出牌,不再与下一层级比价(优先级本身就是结论),
+ *   而 master 是三路打分归并。同样不搜索、不抽样、不用本表的任何旋钮。
+ *   实测(每档各跑 100 局,两边轮换先后手)这一档打赢大师档八成以上,
+ *   打其余各档也不比大师档差:简单 48% / 标准 48% / 困难 36% / 大师 88%,
+ *   同一算法下大师档只有 28% / 20% / 9%。
+ *   但它仍压不过困难档:困难档靠深推演,买牌更果断(五成回合在买牌,这一档只有四成出头),
+ *   这一档花在「预约 / 卡位」上的回合在这里是净损耗。所以「宗师」表示规则最完整、
+ *   压过同族的大师档,不表示对算得深的困难档也占优 —— 想要整体最难缠仍应选困难档。
  */
 const AI_DIFFICULTIES = {
   easy:{
     label:"简单",
-    /* 新手:只看账面(分数/折扣/贵族),不规划撞线,不想对手,而且每步大约三选一地手软。
-       quota 里 buy 给 2 个名额是有意的 —— 只留 1 个会让它反复拿宝石把公共池抽干,
-       两边都买不了卡 → 整局撞回合上限。ptsEnd 故意低于 pts:看不出「谁先摸到 15 分」。 */
-    samples:1, kFollow:4, lookahead:0, epsilon:.7, oppPolicy:"greedy",
-    quota:{buy:2,res:1,resdeck:0,gems:1},
-    w:{pts:1, ptsEnd:1.2, play:0, race:0, discount:.15, noble:.15,
-       surplus:.3, tempoGems:.5, gold:.1, goldEnd:.4, block:0, blockEnd:0},
-  },
-  normal:{
-    label:"标准",
     /* 会推演,但只有 6 步深、抽样 2 次、候选宽度 6,还带 .2 的决策噪声 →
        看得到自己的路线,看不到对手的反击。 */
     samples:2, kFollow:6, lookahead:.35, epsilon:.2, oppPolicy:"greedy",
@@ -948,23 +952,36 @@ const AI_DIFFICULTIES = {
     w:{pts:1, ptsEnd:2.2, play:.45, rounds:6, discount:.25, noble:.35,
        surplus:.4, tempoGems:.45, gold:.2, goldEnd:1.6, block:.25, blockEnd:.7},
   },
-  hard:{
-    label:"困难",
-    /* 与 master 同一套估值(play/rounds/贵族/卡位权重一致),只差「搜索深度」和「对手模型」:
-       hard 假设对手只会贪心买卡,master 假设对手会规划折扣引擎与贵族路线。 */
+  normal:{
+    label:"标准",
+    /* 与 hard 同一套估值(play/rounds/贵族/卡位权重一致),只差「搜索深度」和「对手模型」:
+       normal 假设对手只会贪心买卡,hard 假设对手会规划折扣引擎与贵族路线。 */
     samples:4, kFollow:9, lookahead:.55, epsilon:0, oppPolicy:"greedy",
     quota:{buy:5,res:3,resdeck:1,gems:3},
     w:{pts:1, ptsEnd:2.5, play:.6, rounds:10, discount:.3, noble:.5,
        surplus:.5, tempoGems:.5, gold:.3, goldEnd:2.2, block:.4, blockEnd:1},
   },
-  master:{
-    label:"大师",
-    /* 上限档:同估值再加一档深度(抽样 6 次、推演 12 步),并把前瞻里的对手应手换成
+  hard:{
+    label:"困难",
+    /* 旋钮档的上限:同估值再加一档深度(抽样 6 次、推演 12 步),并把前瞻里的对手应手换成
        oppPolicy:"play" —— 对手模型自己会推演,所以它能提前避开被卡死的路线。 */
     samples:6, kFollow:11, lookahead:.7, epsilon:0, oppPolicy:"play",
     quota:{buy:6,res:4,resdeck:1,gems:4},
     w:{pts:1, ptsEnd:2.6, play:.6, rounds:12, discount:.3, noble:.5,
        surplus:.5, tempoGems:.5, gold:.3, goldEnd:2.4, block:.45, blockEnd:1.1},
+  },
+  master:{
+    label:"大师",
+    /* 攻略档:见 aiGuideDecide —— 严格照「效率至上、攻防一体」的二人局攻略执行。
+       这里不放 samples/quota/w:那些是前瞻内核的旋钮,对本档无效。 */
+    policy:"guide",
+  },
+  grandmaster:{
+    label:"宗师",
+    /* 严格档:见 aiStrictDecide —— 照「二人局高手AI逻辑(完整详尽版)」的六级优先级瀑布逐级判定。
+       本档不用任何前瞻旋钮:samples/quota/w 都无效(瀑布自己决定做哪类动作,不做跨类比较),
+       层级4「拿哪几种宝石」的评价式由 strictColorScore 按规格书给的三个方向就地补齐。 */
+    policy:"strict",
   },
 };
 const ART_API = "https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image";
@@ -1395,7 +1412,7 @@ function aiDiscardTokens(){
 }
 /* ─────────────────── 前瞻内核:公开信息视图 + 抽样推演 ─────────────────── */
 /*
- * 所有档位唯一的决策通路,要点:
+ * easy / normal / hard 共用的唯一决策通路(master 走 aiGuideDecide),要点:
  *  1. 视图层 aiBaseView() 只读取「公开信息」:牌桌、各家宝石/折扣/分数/已买卡、
  *     牌库剩余「数量」、贵族池。绝不读取 S.decks 的顺序,也绝不读取对手 p.reserved 的内容
  *     (对手的预留通过公开数量反推,只保留张数 hiddenRes)。
@@ -1404,7 +1421,7 @@ function aiDiscardTokens(){
  *  3. 估值统一到「分等价」量纲:simScore = 分数 + 离 15 分的距离(play/race) + 折扣资产
  *     + 贵族可达性 + 金币时间价值 - 冗余宝石 - 阻断成本 - 回合机会成本。
  *  4. 决策 = samples 次抽样 × 全动作枚举(含单拿宝石、牌库盲留)× 1-ply 对手应手。
- *  档位之间只差上面那组旋钮,所以任何一次改动都能用 tools/selfplay.js matrix 量化验证。
+ *  这 3 档之间只差上面那组旋钮,所以任何一次改动都能用 tools/selfplay.js matrix 量化验证。
  */
 const AI_END_pts = 15;
 
@@ -1809,6 +1826,602 @@ function simScore(v,pi,prof,block,tempo){
   return s;
 }
 
+/* ═════════════════ 大师档:二人局攻略规则引擎 ═════════════════
+ * 「效率至上,攻防一体」——不搜索、不抽样、不建模对手,严格照攻略三阶段出牌:
+ *   开局:先看全场定关键资源色(三级牌需求色) → 抢高性价比牌,目标高分牌用黄金预约;
+ *   中期:一次拿宝石至少推进两张牌,顺手卡住对手的「命门色」;
+ *   后期:有人接近 10 分即进入冲刺 —— 轮次大于一切,能绝杀就预约绝杀,否则囤关键色。
+ * 信息约束与前瞻内核一致:只用牌桌 / 公共池 / 公开折扣与分数 / 贵族池,
+ * 不读牌库顺序,也不读对手预留内容(只知张数)。
+ * 分值量纲与内核相同(分等价),但只在本档内部横向比较。
+ */
+const GUIDE_END_pts = 10;   /* 攻略:「有人接近 10 分」= 进入冲刺阶段 */
+const GUIDE_TIER = {        /* 攻略给的性价比档位表:总宝石花费 → 分数 */
+  1:{"4,1":4, "3,0":3, "4,0":2, "5,0":1},
+  2:{"6,3":4, "5,2":3, "7,2":2, "8,2":2, "7,1":1, "8,1":1},
+  3:{"10,5":4, "7,4":3, "12,4":2, "14,3":1},
+};
+function guideCostTotal(card){ return COLORS.reduce((s,c)=>s+(card.cost[c]||0),0); }
+function guideTier(card){
+  const t = GUIDE_TIER[card.lv];
+  return (t && t[guideCostTotal(card)+","+card.pts]) || 1;
+}
+/* 分数是主菜,攻略认定的性价比与折扣层级是配菜 */
+function guideCardValue(card){ return card.pts + guideTier(card)*.4 + card.lv*.12; }
+function guideGap(p,card){ return COLORS.reduce((s,c)=>s+Math.max(0,(card.cost[c]||0)-p.bonus[c]-p.tokens[c]),0); }
+function guideEff(p,card){ const g=guideGap(p,card); return g - Math.min(g, p.tokens.O); }
+function guidePhase(v,pi){
+  if(v.endTriggeredBy >= 0 || v.players.some(o=>o.pts >= GUIDE_END_pts)) return "end";
+  return v.players[pi].cards < 3 ? "open" : "mid";
+}
+function guideCtx(){
+  const v=aiBaseView(), pi=v.me, p=v.players[pi];
+  const phase=guidePhase(v,pi);
+  const boardAll=[].concat(v.board[1],v.board[2],v.board[3]);
+  /* 开局「先看全场」:三级牌极难被翻新 → 它的需求色就是本局的关键资源色 */
+  const key=emptyGemSelection();
+  const addKey=(c,w)=>COLORS.forEach(x=>{ const n=c.cost[x]||0; if(n) key[x]+=w*Math.min(n,3); });
+  boardAll.forEach(c=>addKey(c, c.lv===3?3 : c.lv===2?1.2 : .3));
+  p.reserved.forEach(c=>addKey(c,2));                       /* 已宣告的目标 */
+  COLORS.forEach(x=>{ key[x]+= p.bonus[x]*2.5 + Math.min(p.tokens[x],3)*.4; });
+  const keyMax=Math.max(1e-6, key.W, key.B, key.G, key.R, key.K);
+  /* 对手的「命门」:公开折扣色 + 只差这一色就能买走的分数牌 */
+  const oppNeed=emptyGemSelection();
+  const others=v.players.filter((o,i)=>i!==pi);
+  COLORS.forEach(x=>{ others.forEach(op=>{ oppNeed[x]+=op.bonus[x]*1.1; }); });
+  others.forEach(op=>{
+    boardAll.forEach(c=>{
+      if(c.pts<=0) return;
+      let tot=0; const gaps=[];
+      COLORS.forEach(x=>{
+        const g=Math.max(0,(c.cost[x]||0)-op.bonus[x]-op.tokens[x]);
+        if(g>0){ gaps.push([x,g]); tot+=g; }
+      });
+      if(!tot || tot>3 || tot-Math.min(tot,op.tokens.O)>3) return;
+      gaps.forEach(([x,g])=>{ oppNeed[x]+= (c.pts*.5 + c.lv*.4)*(g/tot); });
+    });
+  });
+  /* 目标牌:还没买得起、但已在方向上的高性价比牌;冲刺阶段只留「一步能兑现的分」。 */
+  const pool=[];
+  p.reserved.concat(boardAll).forEach(c=>{
+    const gap=guideGap(p,c); if(gap<=0) return;
+    const eff=guideEff(p,c); if(eff<=0) return;
+    const tier=guideTier(c);
+    if(phase==="end"){ if(c.pts<=0 || eff>3) return; }
+    else if(tier<2 && c.pts<2) return;
+    pool.push({card:c, gap, eff, value:guideCardValue(c)});
+  });
+  pool.sort((a,b)=>b.value/(1+b.eff) - a.value/(1+a.eff));
+  /* 可及范围随发展深度放宽 —— 开局就死盯三级牌是本档最初的死法:
+     五个宝石的缺口补不满,手里十颗宝石全是废色。 */
+  const reach = Math.min(6, 3 + p.cards);
+  const near = pool.filter(t=>t.eff<=reach);
+  /* 主攻目标只留头部三个:攻略要「方向清晰」,把宝石摊到十张牌上等于什么都没推进;
+     但也不能只盯一张 —— 那样一次拿宝石就只能推进一条线,效率反而最低。
+     一张都够不着时(开局)退回头看最优先的那张,至少方向不是瞎选的。 */
+  const focus = near.length ? near.slice(0,3) : pool.slice(0,1);
+  return {v, pi, p, phase, key, keyMax, oppNeed, focus};
+}
+/* 买下这张牌能否立刻请来贵族(攻略未提,但 +3 分是实打实的回合收益) */
+function guideNobleGain(v,pi,card){
+  const p=v.players[pi];
+  let gain=0;
+  v.nobles.forEach(x=>{
+    if(x.taken!==null) return;
+    const gap=COLORS.reduce((s,c)=>s+Math.max(0,(x.cost[c]||0)-p.bonus[c]-(c===card.color?1:0)),0);
+    if(gap===0) gain=3;
+  });
+  return gain;
+}
+/* 摘掉这张牌给对手造成的损失 */
+function guideDeny(ctx,card){ return aiOpponentThreatGain(ctx.v,ctx.pi,card); }
+/* 为这张牌已经投入多少:攻略要保护「已经宣告的目标」,不半途而废 */
+function guideCommit(ctx,card){
+  const p=ctx.p;
+  let tot=0, have=0, dirs=0, hit=0;
+  COLORS.forEach(x=>{
+    const need=card.cost[x]||0; if(!need) return;
+    tot+=need; have+=Math.min(need, p.bonus[x]+p.tokens[x]);
+    dirs++; if(ctx.key[x] >= ctx.keyMax*.5) hit++;
+  });
+  if(!tot) return 1;
+  return Math.min(1, have/tot*.8 + hit/dirs*.4);
+}
+/* 预约的战略价值:绝杀 > 抢高分牌 > (不占预留位) */
+function guideReserveValue(ctx,card){
+  const {v,pi,p,phase}=ctx;
+  /* 绝杀:对手下回合买走它就能撞线 → 哪怕用不上也必须摘掉 */
+  let alarm=0;
+  v.players.forEach((op,i)=>{
+    if(i===pi || guideEff(op,card)>0) return;
+    alarm=Math.max(alarm, op.pts+card.pts+guideNobleGain(v,i,card));
+  });
+  if(alarm>=AI_END_pts) return 40;          /* 绝杀 */
+  if(phase==="end") return 0;               /* 后期不做长期布局 */
+  if(card.lv===1) return 0;                 /* 一级牌会不断翻新,不值得占预留位 */
+  if(p.reserved.length>=3) return 0;
+  const tier=guideTier(card);
+  if(tier<3) return 0;                      /* 只抢攻略认定的高分性价比牌 */
+  /* 长期布局型预约:只为自己真正在做的方向占位 —— 预约一张永远买不到的牌
+     等于白送对手一个信息 + 浪费一个回合。价值高于「随手拿三个宝石」,但绝不高于「这回合就买牌」。 */
+  const commit=guideCommit(ctx,card);
+  /* 「已投入」门槛只管中期的顺路占位:攻略要求开局就在投入之前把目标锁下来 */
+  if(phase!=="open" && commit < .35) return 0;
+  const deny=Math.min(guideDeny(ctx,card),3);
+  let s = 1.3*commit + tier*.3 + card.pts*.28 + deny*.3;
+  /* 开局抢预约本身是一次变现:既锁定未来的高分牌,又向对手宣告方向。
+     所以按落袋量纲给分(可以和拿宝石正面竞争),但仍不高于「这回合就能买走的牌」。 */
+  if(phase==="open") return Math.min(3.4, s + .4 + card.pts*.3);
+  return Math.min(2.2, s);
+}
+/* 合法拿宝石组合:最多 3 个;同色双拿要求公共池 >= 4(与本实现的人类侧规则一致) */
+function guideGemCombos(ctx){
+  const v=ctx.v, out=[], seen=new Set();
+  const push=arr=>{
+    const sel=emptyGemSelection(); arr.forEach(c=>sel[c]++);
+    const k=aiSelKey(sel);
+    if(seen.has(k)) return;
+    seen.add(k); out.push(sel);
+  };
+  for(let i=0;i<5;i++) for(let j=i+1;j<5;j++) for(let k=j+1;k<5;k++){
+    const a=COLORS[i],b=COLORS[j],c=COLORS[k];
+    if(v.tokens[a]&&v.tokens[b]&&v.tokens[c]) push([a,b,c]);
+  }
+  COLORS.forEach(c=>{ if(v.tokens[c]>=4) push([c,c]); });
+  for(let i=0;i<5;i++) for(let j=i+1;j<5;j++)
+    if(v.tokens[COLORS[i]]&&v.tokens[COLORS[j]]) push([COLORS[i],COLORS[j]]);
+  COLORS.forEach(c=>{ if(v.tokens[c]) push([c]); });
+  return out;
+}
+/* 拿宝石是「投资」,买牌是「落袋」——两者必须换算到同一量纲才可比:
+ *   进度分 = 目标价值 × (这次推进多少 / 还差多少) × 等待折算
+ *   完成分 = 目标价值 × 兑现折算(下回合就能买走,已接近立刻落袋)
+ * 折算永远小于 1(含 guideGemScore 里的 near 乘子:前期 1.5 × .62 = .93,
+ * 后期 near 恒为 1 → 1 × .95 = .95,两条都 < 1),
+ * 所以「这回合买牌」恒大于「为下回合买牌拿宝石」——
+ * 这正是攻略的「用最少的行动换来最多的分数」。 */
+const GUIDE_PROGRESS = .35;   /* 远期进度:一个回合的等待要重折 */
+const GUIDE_FINISH   = .62;   /* 下回合即可买走 */
+const GUIDE_PROGRESS_END = .10;   /* 冲刺阶段:远期进度基本无意义 */
+const GUIDE_FINISH_END   = .95;   /* 冲刺阶段:轮次大于一切,一步到位最值 */
+function guideGemScore(ctx,sel){
+  const p=ctx.p, end=ctx.phase==="end";
+  const n=COLORS.reduce((s,c)=>s+(sel[c]||0),0);
+  const fw = end ? GUIDE_FINISH_END : GUIDE_FINISH;
+  const pw = end ? GUIDE_PROGRESS_END : GUIDE_PROGRESS;
+  /* 手里已经堆了一把宝石:此时再拿「还差得远」的颜色就是纯囤积,一律重折 */
+  const cash = !end && aiTotalTok(p) >= 6;
+  let adv=0, sum=0, best=0, done=0;
+  ctx.focus.forEach(t=>{
+    let ng=0;
+    COLORS.forEach(c=>{ ng += Math.max(0,(t.card.cost[c]||0)-p.bonus[c]-p.tokens[c]-(sel[c]||0)); });
+    const left = Math.max(0, ng - p.tokens.O);         /* 黄金能补的部分视为已到位 */
+    const gained = t.eff - left;
+    if(gained<=0) return;
+    adv++;
+    let w = left===0 ? fw : pw;
+    if(cash && left>0) w *= .3;
+    /* 一步之遥的目标优先推完,但上限必须守住下面那条量纲契约:
+       max(near) × fw < 1,否则「为下回合买牌而拿宝石」会反超「这回合就买牌」。
+       后期 fw 已经等于 .95(本身就在表达"一步到位"),near 再乘一次是重复计价,
+       且 1.5×.95>1 会直接破约 —— 所以后期不再加成。 */
+    const near = end ? 1 : t.eff<=1 ? 1.5 : t.eff<=2 ? 1.3 : 1;
+    const g = t.value*(gained/Math.max(1,t.eff))*w*near;
+    sum+=g; if(g>best) best=g;
+    /* 这次拿完下回合就能买走的牌,值多少分 —— 用来判断「值不值得为它空转一回合」 */
+    if(left===0 && t.card.pts>0) done=Math.max(done, t.value+guideNobleGain(ctx.v,ctx.pi,t.card));
+  });
+  /* 主攻目标之间只给少量协同加成:同时推进两张是好棋,但不能靠多线摊薄刷分 */
+  let s = best + (sum-best)*.25;
+  if(adv>=2 && !end) s += .25;
+  let blk=0;                                              /* 「防」的三项加成单独累计,见下方封顶 */
+  COLORS.forEach(c=>{
+    const k=sel[c]||0; if(!k) return;
+    blk += k*(ctx.key[c]/ctx.keyMax)*.14;                 /* 同价时优先囤方向色 */
+    /* 卡命门:攻略要求「抢走对手急需的颜色」,后期升级成「囤积关键色让他拿不到」 */
+    const need=Math.min(ctx.oppNeed[c],4);
+    blk += k*need*(end?1.0:.18);
+    if(ctx.v.tokens[c]-k<=0) blk += need*(end?1.8:.9);    /* 抽干公共池 = 这一色彻底封锁 */
+    /* 避免无意义囤积:主攻目标完全用不上的颜色才扣分,单色堆过量再罚 */
+    let want=0;
+    ctx.focus.forEach(t=>{ want += Math.max(0,(t.card.cost[c]||0)-p.bonus[c]-p.tokens[c]); });
+    if(!end && ctx.focus.length){
+      if(want===0) s -= k*.5;
+      if(p.tokens[c]+k>5) s -= (p.tokens[c]+k-5)*.4;
+    }
+  });
+  /* 攻防一体 ≠ 以防为主:封锁是加法项且可三项叠加,不封顶时一颗卡位宝石就能顶上半张三级牌,
+     「这回合买牌 / 下回合撞线」永远比不过「顺手卡他一下」。所以给防的总和设上限,
+     让它只在推进程度相当时决定挑哪几颗宝石 —— 符合攻略「轮次大于一切,囤色是辅助」。 */
+  s += Math.min(blk, end ? 2.0 : 1.0);
+  if(aiTotalTok(p)+n>9) s -= end ? .3 : 1.2;
+  return {s, done};
+}
+/* 攻略版弃牌:黄金 > 目标牌缺口色 > 方向色 > 卡位色,丢掉冗余 */
+function guideTokenKeepValue(ctx,color){
+  if(color===GOLD) return 9;
+  const p=ctx.p;
+  let s=(ctx.key[color]/ctx.keyMax)*1.2 + Math.min(ctx.oppNeed[color],4)*.15;
+  ctx.focus.forEach(t=>{
+    const g=Math.max(0,(t.card.cost[color]||0)-p.bonus[color]-p.tokens[color]);
+    if(g>0) s += Math.min(g,2)*t.value*.25;
+  });
+  s -= Math.max(0, p.tokens[color]-4)*.4;
+  return s;
+}
+function aiGuideDecide(){
+  const ctx=guideCtx();
+  const {v,pi,p,phase}=ctx;
+  const boardAll=[].concat(v.board[1],v.board[2],v.board[3]);
+  /* ── 铁律 1:撞线买牌 —— 「轮次大于一切」,一回合结束比赛 ── */
+  let win=null;
+  const scanWin=(list,fromRes)=>list.forEach(c=>{
+    if(!canAfford(p,c)) return;
+    const after=p.pts+c.pts+guideNobleGain(v,pi,c);
+    if(after>=AI_END_pts && (!win || after>win.after))
+      win={after, a:{kind:"buy", card:c, fromRes, level:c.lv}};
+  });
+  scanWin(p.reserved,true);
+  for(const lv of [1,2,3]) scanWin(v.board[lv],false);
+  if(win) return win.a;
+  /* ── 铁律 2:绝杀 —— 对手下回合买走这张就撞线,买走 > 预约摘掉 ── */
+  let kill=null;
+  boardAll.forEach(c=>{
+    v.players.forEach((op,i)=>{
+      if(i===pi || guideEff(op,c)>0) return;                     /* 对手现在买不起 */
+      if(op.pts+c.pts+guideNobleGain(v,i,c) < AI_END_pts) return;/* 买走也撞不了线 */
+      const sc = c.pts - guideEff(p,c)*0.2;                      /* 自己用上更好 */
+      if(!kill || sc>kill.sc) kill={sc, card:c, level:c.lv};
+    });
+  });
+  if(kill){
+    if(canAfford(p,kill.card)) return {kind:"buy", card:kill.card, fromRes:false, level:kill.level};
+    if(p.reserved.length<3) return {kind:"res", card:kill.card, fromRes:false, level:kill.level};
+  }
+  /* ① 能买到手的牌:落袋优先,冲刺阶段不为 0 分牌浪费回合 */
+  let buy=null;
+  const consider=(card,fromRes)=>{
+    const noble=guideNobleGain(v,pi,card);
+    let val=guideCardValue(card)+noble+guideDeny(ctx,card)*.6+(fromRes?.4:0);
+    if(phase==="end" && card.pts===0) val-=9;
+    else if(card.pts===0 && guideTier(card)<=2) val-=1;
+    if(!buy || val>buy.val) buy={val, a:{kind:"buy", card, fromRes, level:card.lv}};
+  };
+  p.reserved.forEach(c=>{ if(canAfford(p,c)) consider(c,true); });
+  for(const lv of [1,2,3]) v.board[lv].forEach(c=>{ if(canAfford(p,c)) consider(c,false); });
+  /* ② 预约:开局抢高分牌(绝杀已由铁律 2 处理) */
+  let res=null;
+  if(p.reserved.length<3){
+    for(const lv of [1,2,3]) v.board[lv].forEach(c=>{
+      const val=guideReserveValue(ctx,c);
+      if(val>0 && (!res || val>res.val)) res={val, a:{kind:"res", card:c, fromRes:false, level:lv}};
+    });
+  }
+  /* ③ 拿宝石:聚焦推进 + 卡位 */
+  let gem=null;
+  guideGemCombos(ctx).forEach(sel=>{
+    const r=guideGemScore(ctx,sel);
+    if(!gem || r.s>gem.val) gem={val:r.s, done:r.done, a:{kind:"gems", sel}};
+  });
+  /* 效率至上:能变现就绝不空转 —— 除非这批宝石下回合就能兑现一张更大的分。
+     攻略的「用最少的行动换最多的分数」按「分数/回合」计:这回合能换回分数的牌就是一次变现,
+     1 分牌也不例外(它常常比再攒两回合去买 3 分牌更快);0 分牌只是引擎,
+     除非它在攻略性价比表里排到头部,否则不配落袋溢价。 */
+  const worth = buy && (phase==="end" || buy.a.card.pts>=1 || guideTier(buy.a.card)>=3);
+  const cashBonus = worth ? 1 + buy.a.card.pts : .3;
+  if(worth && !(gem && gem.done >= buy.val + .5)) return buy.a;
+  const cands=[];
+  if(buy)  cands.push({val:buy.val+cashBonus, a:buy.a});
+  if(res)  cands.push({val:res.val,     a:res.a});
+  if(gem)  cands.push({val:gem.val,     a:gem.a});
+  cands.sort((x,y)=>y.val-x.val);
+  if(cands.length) return cands[0].a;
+  /* 兜底:牌库盲留(优先三级) → 拿宝石 → 交给上层跳过回合 */
+  if(p.reserved.length<3){
+    for(const lv of [3,2,1]) if(v.deckLen[lv]>0) return {kind:"resdeck", card:null, level:lv};
+  }
+  const any=guideGemCombos(ctx)[0];
+  return any ? {kind:"gems", sel:any} : null;
+}
+/* ═════════════════ 宗师档:六级优先级瀑布(严格档) ═════════════════
+ * 逐字照「二人局高手AI逻辑(完整详尽版)」实现。六个层级按优先级串成硬瀑布:
+ *   层级0 终局阻断 → 层级1 高分牌预约 → 层级2 贵族冲刺 → 层级3 购买一级牌
+ *   → 层级4 拿宝石(含卡位) → 层级5 保底拿取
+ * 上一层级只要给出可执行动作就直接出牌,不再与下一层级比价 —— 这是它与大师档
+ * (buy/res/gems 三路打分归并)的根本区别:在这里「优先级」本身就是结论。
+ * 三原则:阻断优先(层级0 亏节奏也在所不惜)/ 效率至上(跳过一切亏本交易)/
+ *        贵族备选(层级2 不产动作,只把缺色写进层级3/4 的需求分)。
+ * 信息约束与各档一致:只读公开信息,不读牌库顺序,也不读对手预留内容(只知张数)。
+ * 规格书的留白与自相矛盾之处都在对应函数就地补齐,并写明取舍理由。
+ * 代价:硬瀑布不做「这张牌 vs 这颗宝石」的回报比较,买牌回合占比低于困难档,
+ *   因此压不过困难档;强弱关系与实测数字见 AI_DIFFICULTIES 的注释。
+ */
+const STRICT = {
+  /* 第五部分关键参数表:WIN_SCORE=15 就是 AI_END_pts,BLOCK_BUY_TURNS 折算成下面的成本窗口 */
+  BLOCK_TRIGGER_SCORE:10, BLOCK_WINDOW_COST:6,   /* 缺 ≤6 个宝石 ≈ 1-2 回合能买到 */
+  PREMIUM_3_SCORE:4, PREMIUM_2_SCORE:3, RESERVE_DISCOUNT_MIN:2,
+  GOLD_MAX_FOR_RESERVE:2, GOLD_RESERVE_EMERGENCY:1,
+  NOBLE_MAX_MISSING:2, NOBLE_COST_PER_POINT_MAX:3,
+  PURCHASE_1_GOOD_COST:4, PURCHASE_1_GOOD_SCORE:1, PURCHASE_1_CHEAP_COST:3,
+  GEM_MAX:10,
+  /* 攻略留白补齐:层级3 只认一级 A/B/C,而撞线要 15 分 —— 光靠 1 分牌永远赢不了。
+     于是「拿不动宝石」时必须有个兑现出口:宝石空间 ≤ SAT_ROOM(即已有 8 个以上)就允许
+     把资源换成分数最高的牌。这不是给攻略加权,而是它的水位线本身:握着 10 个宝石再过一轮
+     就要白丢,那才是真正的亏本交易。 */
+  SAT_ROOM:2,
+  /* 攻略把 B/C 类(0 分一级牌)定位为「建引擎」,却没给停止条件 —— 实测它会一路买到 15 张牌
+     仍在买 0 分卡:折扣越堆越多,分数永远停在 12-13。0 分卡只在引擎窗口内值得占一个回合,
+     超过张数就只算「资源饱和兑现」(rank 14),否则一律让给层级4 的定向拿取。 */
+  ENGINE_MAX_CARDS:6,
+  BUY_TIER_MIN:3,   /* 层级3 落袋门槛:性价比表头部 */
+  PREMIUM_MAX_GAP:6,   /* 层级1 只锁「1-2 回合内买得下来」的高分牌,否则预约=死资产 */
+  /* 层级3 同优先级细分:场上需求次数 0.3 / 贵族匹配 1.0 / 对手最缺色 0.5 */
+  W_DEMAND:.3, W_NOBLE_MATCH:1.0, W_BLOCK_COLOR:.5,
+  ADVANCE_BONUS:1.5,   /* 模式 A:一次拿宝石同时推进 ≥2 张待购牌 */
+};
+/* 这张牌在 color 上「扣掉折扣后还差着」。只用折扣不用宝石:
+   攻略禁忌「对手已有大量折扣的颜色卡位无效」正好由此自动成立(折扣覆盖 → 需求为 0)。 */
+function strictNeeds(card,color,bonus){ return (card.cost[color]||0) - (bonus[color]||0) > 0; }
+/* 一次决策的公共上下文:层级4 的「待购牌需求」与「对手最缺色」都要全场统计,
+   每层重算既浪费又容易前后不一致,所以整轮只算一次。 */
+function strictCtx(){
+  const v=aiBaseView(), pi=v.me, p=v.players[pi];
+  const boardAll=[].concat(v.board[1],v.board[2],v.board[3]);
+  const others=v.players.map((o,i)=>({o,i})).filter(x=>x.i!==pi);
+  const ctx={ v, pi, p, boardAll, others, gold:p.tokens.O||0,
+              endRound:v.endTriggeredBy>=0, demand:emptyGemSelection(),
+              pendSelf:[], oppPend:[], oppLack:null, plan:{targets:[], colors:new Set()} };
+  boardAll.forEach(c=>COLORS.forEach(x=>{ if(c.cost[x]) ctx.demand[x]++; }));
+  /* 「待购牌」只能按公开信息取:自己 = 预留 + 场上缺口在窗口内 yet 买不起的牌;
+     对手 = 场上同样在窗口内的牌(对手预留内容不可见)。场上牌各取价值/效率比最高的 4 张 ——
+     次数类统计必须有界,否则五种颜色的需求会被整张牌桌摊平,得分失去分辨力。
+     预留牌则无条件全收:它们是层级1 已经宣告的目标,攻略「保护已投入的目标」正在于此。 */
+  const pendOf=(pl,list)=>{
+    const s=list.map(c=>({c, eff:guideEff(pl,c), gap:guideGap(pl,c)}))
+                .filter(x=>x.gap>0 && x.eff>0 && x.gap<=STRICT.BLOCK_WINDOW_COST)
+                .map(x=>({c:x.c, r:guideCardValue(x.c)/(1+x.eff)}));
+    s.sort((a,b)=>b.r-a.r);
+    return s.slice(0,4).map(x=>x.c);
+  };
+  ctx.pendSelf=p.reserved.slice().concat(pendOf(p, boardAll));
+  ctx.oppPend=others.map(x=>({bonus:x.o.bonus, cards:pendOf(x.o, boardAll)}));
+  const lack=emptyGemSelection();
+  ctx.oppPend.forEach(e=>e.cards.forEach(c=>COLORS.forEach(x=>{ if(strictNeeds(c,x,e.bonus)) lack[x]++; })));
+  COLORS.forEach(x=>{ if(lack[x]>0 && (ctx.oppLack===null || lack[x]>lack[ctx.oppLack])) ctx.oppLack=x; });
+  ctx.plan=strictNoblePlan(ctx);
+  return ctx;
+}
+/* 层级2:贵族冲刺。不产动作,只产出「正在凑的贵族缺色」,供层级3/4 加分。 */
+function strictNoblePlan(ctx){
+  const p=ctx.p, targets=[], colors=new Set();
+  ctx.v.nobles.forEach(n=>{
+    if(n.taken!==null) return;
+    let sat=0, miss=0; const missing=[];
+    COLORS.forEach(c=>{
+      if(!(n.cost[c]||0)) return;
+      const need=(n.cost[c]||0)-p.bonus[c];
+      if(need>0){ miss+=need; missing.push(c); } else sat++;
+    });
+    if(sat<2 || miss>STRICT.NOBLE_MAX_MISSING) return;       /* 已满足 ≥2 色,且缺牌 ≤2 张 */
+    if(miss*4/3 > STRICT.NOBLE_COST_PER_POINT_MAX) return;   /* 每分成本 ≤3 个宝石(每张按 4 估) */
+    targets.push({cost:n.cost, missing, miss});
+    missing.forEach(c=>colors.add(c));
+  });
+  return {targets, colors};
+}
+/* 这次拿宝石把多少张待购牌的缺口真正往前推了(黄金能补的部分视为已到位) */
+function strictAdvance(ctx,sel){
+  const p=ctx.p;
+  let n=0;
+  ctx.pendSelf.forEach(c=>{
+    const before=guideEff(p,c);
+    const gap=COLORS.reduce((s,x)=>s+Math.max(0,(c.cost[x]||0)-p.bonus[x]-p.tokens[x]-(sel[x]||0)),0);
+    if(Math.max(0,gap-p.tokens.O) < before) n++;
+  });
+  return n;
+}
+/* 层级4 的「拿哪几种宝石」:规格书只给了方向(推进待购牌 / 凑贵族 / 卡对手),没给评价式。
+   下面把那三个方向写成可加的边际分 —— 单颗宝石的分量 = 它在自己待购牌上还差着(需求越集中
+   权重越高) + 是不是正在凑的贵族缺色 + 是不是对手最缺的那一色,再按已有量递减。
+   层级判据与层内评价式都出自规格书本身,不借用其它档位的权重。 */
+function strictColorScore(ctx,color,have){
+  const p=ctx.p;
+  let need=0;
+  ctx.pendSelf.forEach(c=>{ if(strictNeeds(c,color,p.bonus)) need++; });
+  let s = need * (1 + ctx.demand[color]*STRICT.W_DEMAND);
+  if(ctx.plan.colors.has(color)) s += STRICT.W_NOBLE_MATCH;
+  if(ctx.oppLack===color)        s += STRICT.W_BLOCK_COLOR;
+  return s * Math.max(.25, 1 - Math.min(have,4)*.25);
+}
+/* 层级4 + 层级5:模式 A(同时推进 ≥2 张待购牌,首选)> 模式 B(卡位)/C(囤关键色)。
+   规格书规定先 A 后 B/C 的次序,所以候选集按 A 收窄,再在收窄后的集合里取方向分最高的一组。 */
+function strictTake(ctx){
+  const p=ctx.p;
+  const room=STRICT.GEM_MAX - aiTotalTok(p);
+  if(room<=0) return null;
+  const pool=guideGemCombos(ctx).filter(sel=>COLORS.reduce((s,c)=>s+sel[c],0) <= room);
+  if(!pool.length) return null;
+  /* 禁忌:已有 ≥4 的颜色不再拿;拿不动时退回不限禁忌,交由方向分自己递减扣分 */
+  const fresh=pool.filter(sel=>COLORS.every(c=> !sel[c] || (p.tokens[c]||0) < 4));
+  const src=fresh.length ? fresh : pool;
+  const scoreSel=sel=>COLORS.reduce((t,c)=>{
+    let v=0;
+    for(let i=0;i<sel[c];i++) v+=strictColorScore(ctx,c,(p.tokens[c]||0)+i);
+    return t+v;
+  },0);
+  const modeA=src.filter(sel=>strictAdvance(ctx,sel)>=2);
+  let best=null;
+  (modeA.length ? modeA : src).forEach(sel=>{
+    const s=scoreSel(sel) + (strictAdvance(ctx,sel)>=2 ? STRICT.ADVANCE_BONUS : 0);
+    if(!best || s>best.s) best={s, sel};
+  });
+  return best ? {kind:"gems", sel:best.sel} : null;
+}
+/* 层级3 的分类表:只认攻略列出的 A/B/C 三类一级牌,其余(含成本 ≥5 的 0 分 D 类)一律不买 */
+function strictBuyClass(card){
+  if(card.lv!==1) return 0;
+  const cost=guideCostTotal(card);
+  if(card.pts>=STRICT.PURCHASE_1_GOOD_SCORE && cost<=STRICT.PURCHASE_1_GOOD_COST) return 1; /* A */
+  if(card.pts===0 && cost<=STRICT.PURCHASE_1_CHEAP_COST) return 2;                           /* B */
+  if(card.pts===0 && cost===STRICT.PURCHASE_1_GOOD_COST) return 3;                           /* C */
+  return 0;                                                                                   /* D */
+}
+function strictBuy1Score(ctx,card){
+  let s=card.pts*2 - guideCostTotal(card) + ctx.demand[card.color]*STRICT.W_DEMAND;
+  if(ctx.plan.colors.has(card.color)) s+=STRICT.W_NOBLE_MATCH;             /* 顺路补贵族 */
+  if(ctx.oppLack && card.color===ctx.oppLack) s+=STRICT.W_BLOCK_COLOR;     /* 抢对手最缺的色 */
+  return s;
+}
+/* 黄金管理(第三部分):黄金当万能宝石买牌一律禁止,只放开两条通道 ——
+   ① 获胜的最后一手(由铁律 A 处理)与终局轮的带分牌;② 兑现层级1 预约的高分牌
+   (预约它的目的就是为了买得起)。其余情况永远保留 1 个应急黄金。 */
+function strictGoldOK(ctx,card,fromRes){
+  const use=costFor(ctx.p,card).O;
+  if(use<=0) return true;
+  if(fromRes && card.lv>=2) return true;
+  if(ctx.endRound && card.pts>0) return true;
+  return card.pts>=2 && use <= ctx.gold - STRICT.GOLD_RESERVE_EMERGENCY;
+}
+/* 层级3:购买。补齐 —— 攻略的层级3 只写了一级牌,但那样层级1 预约的高分资产永远兑现不了
+   (几乎赢不了),所以购买层同时接受「可兑现的预留牌」与「当场落袋的攻略头部高分牌」。
+   再补一条水位线:宝石多到快拿不动(room ≤ SAT_ROOM)时,把资源换成分数最高的牌 ——
+   握着 10 个宝石等弃牌阶段白送,比买一张「不在性价比表里」的牌亏得多。 */
+function strictBuy(ctx){
+  const {v,pi,p}=ctx;
+  const room = STRICT.GEM_MAX - aiTotalTok(p);
+  const sat = room <= STRICT.SAT_ROOM;
+  /* 宝石已到顶 → 拿取只剩"拿一弃一"的原地空转,此时黄金禁忌必须让路。
+     否则本档会在一手好牌全部差 1 个黄金时既买不动又不肯买,和对手一轮一个宝石互抽到
+     回合上限(实测出现过双方各握 10 宝石、四千多步谁也动不了的死局)。 */
+  const capped = room <= 0;
+  let best=null;
+  const push=(rank,val,a)=>{
+    if(!best || rank<best.rank || (rank===best.rank && val>best.val)) best={rank, val, a};
+  };
+  const consider=(card,fromRes)=>{
+    if(!canAfford(p,card)) return;
+    if(card.lv===1){
+      if(costFor(p,card).O>0 && !capped) return;           /* 一级引擎牌不吃黄金(到顶时除外) */
+      const cls=strictBuyClass(card);
+      /* A 类带分,任何时候都算「即时收益」;B/C 类 0 分,只有引擎还没成型时才值得占回合。 */
+      const inEngine = !card.pts ? p.cards < STRICT.ENGINE_MAX_CARDS : true;
+      if(cls && inEngine) push(10+cls, strictBuy1Score(ctx,card), {kind:"buy", card, fromRes, level:1});
+      /* sat 这个出口不能再按 cls / pts 收窄:宝石到顶(room=0)时层级4 与层级5 都必返 null,
+         预留也满 → 这里是唯一还有产出的分支。曾照规格书「D 类永远不买」收紧过一次,
+         结果一半以上回合无事可做,还复现了上面那个死局,胜率明显下滑。
+         所以宁可违背这条禁忌:宝石拿不动时买任何买得动的牌,都好过整轮无事可做。 */
+      else if(sat) push(14, strictBuy1Score(ctx,card), {kind:"buy", card, fromRes, level:1});
+      return;
+    }
+    if(!fromRes && !sat && guideTier(card)<STRICT.BUY_TIER_MIN) return;   /* 场上只落袋性价比表头部的高分牌 */
+    if(!capped && !strictGoldOK(ctx,card,fromRes)) return;
+    const val=guideCardValue(card)+guideNobleGain(v,pi,card)+guideDeny(ctx,card)*.6;
+    push(fromRes?0:(sat?2:1), val, {kind:"buy", card, fromRes, level:card.lv});
+  };
+  p.reserved.forEach(c=>consider(c,true));
+  for(const lv of [1,2,3]) v.board[lv].forEach(c=>consider(c,false));
+  return best ? best.a : null;
+}
+/* 层级0:终局阻断 —— 唯一一个「绝对优先」的动作,即使亏了节奏也在所不惜。
+   攻略写「手里至少 1 个黄金才能用黄金预约该牌」,那是因为该写法里预约要花黄金;
+   本实现预约反而 +1 黄金 → 前置条件天然满足,阻断无条件执行。
+   多张候选取对手最快能买到的(有效缺口最小);自己买得动就直接买走 ——
+   同样摘掉这张牌还白拿分数,同时满足「阻断优先」与「效率至上」。 */
+function strictBlock(ctx){
+  const {v,p}=ctx;
+  let best=null, threatened=false;
+  for(const lv of [1,2,3]) v.board[lv].forEach(c=>{
+    let eff=null;
+    v.players.forEach((op,i)=>{
+      if(i===ctx.pi || op.pts<STRICT.BLOCK_TRIGGER_SCORE) return;
+      if(op.pts + c.pts + guideNobleGain(v,i,c) < AI_END_pts) return;   /* 买走也撞不了线 */
+      const e=guideEff(op,c);
+      if(e>STRICT.BLOCK_WINDOW_COST) return;                            /* 不在 1-2 回合窗口内 */
+      if(eff===null || e<eff) eff=e;
+    });
+    if(eff===null) return;
+    threatened=true;
+    const a = canAfford(p,c) ? {kind:"buy", card:c, fromRes:false, level:lv}
+              : (p.reserved.length<3 ? {kind:"res", card:c, level:lv} : null);
+    if(!a) return;
+    const key=(a.kind==="buy"?100:0) - eff*10 + c.pts;   /* 买 > 拦,对手拦得越急越好 */
+    if(!best || key>best.key) best={key, a};
+  });
+  if(best) return best.a;
+  /* 预留位已满又买不动 → 按攻略改为拿对手最需要的颜色拖延(层级4 的卡位权重正是这件事) */
+  return threatened ? strictTake(ctx) : null;
+}
+/* 层级1:高分牌预约。评分 = 性价比×3 + 对手折扣×0.5 + 贵族匹配 1.0(正文的 0.5 与
+   伪代码/参数表冲突,取后者)。现在就能买走的牌不在这里处理 —— 落袋永远优于占位。 */
+function strictReserve(ctx){
+  const {v,p}=ctx;
+  if(p.reserved.length>=3) return null;
+  /* 黄金窗口:伪代码与 3.1 表是 1 ≤ gold ≤ 2,3.2 又有「gold == 0 时优先预约补黄金」——
+     本实现预约 +1 黄金,所以只放宽下限(上限仍按 GOLD_MAX_FOR_RESERVE=2 执行)。 */
+  if(ctx.gold > STRICT.GOLD_MAX_FOR_RESERVE) return null;
+  let best=null;
+  for(const lv of [2,3]) v.board[lv].forEach(c=>{
+    if(lv===3 && c.pts<STRICT.PREMIUM_3_SCORE) return;
+    if(lv===2 && c.pts<STRICT.PREMIUM_2_SCORE) return;
+    if(p.bonus[c.color] < STRICT.RESERVE_DISCOUNT_MIN) return;   /* 折扣 ≥2,否则预约下来也买不起 */
+    if(canAfford(p,c)) return;
+    /* 攻略没写的前置:预约是「锁定未来资产」,前提是这座资产收得回来。
+       缺口超过 1-2 回合的量(PREMIUM_MAX_GAP)就放弃 —— 占着预留位买不下来的牌是死资产,
+       实测会直接把整局拖成「三个人各留三张三级牌然后互相干瞪眼」的死局。 */
+    if(guideEff(p,c) > STRICT.PREMIUM_MAX_GAP) return;
+    const opp=v.players.reduce((s,o,i)=> i===ctx.pi ? s : s+(o.bonus[c.color]||0), 0);
+    const total = c.pts/guideCostTotal(c)*3 + opp*0.5 + (ctx.plan.colors.has(c.color) ? 1.0 : 0);
+    if(!best || total>best.total) best={total, a:{kind:"res", card:c, level:lv}};
+  });
+  return best ? best.a : null;
+}
+/* 宗师档弃牌:规格书只规定「黄金永远最后丢」,没给彩色宝石的弃牌价序,
+   所以沿用大师档那张「什么宝石更值钱」的表(它按当前待购需求打分),与出牌口径同源。
+   层级4 的 strictColorScore 不适合当弃牌价序:它对「当前没人要」的颜色一律给 0,
+   三档并列时弃谁完全由遍历顺序决定,等于把最有弹性的万能色先丢出去。 */
+function strictTokenKeepValue(ctx,color){
+  if(color===GOLD) return 99;   /* 攻略:始终保留至少 1 个应急黄金 */
+  if(!ctx.g) ctx.g = guideCtx();   /* 与层级4 出牌同源;ctx 每轮重建,备忘不会跨轮失效 */
+  return guideTokenKeepValue(ctx.g, color);
+}
+function aiStrictDecide(){
+  const ctx=strictCtx();
+  const {v,pi,p}=ctx;
+  /* ── 铁律 A:自己撞线买牌 —— 规格书只写了拦对手,漏了「我这回合就能赢」。
+      「轮次大于一切」对双方都成立:能一回合结束比赛,就绝不停在 14 分去搞阻断。 ── */
+  let win=null;
+  const scanWin=(list,fromRes)=>list.forEach(c=>{
+    if(!canAfford(p,c)) return;
+    const after=p.pts+c.pts+guideNobleGain(v,pi,c);
+    if(after>=AI_END_pts && (!win || after>win.after))
+      win={after, a:{kind:"buy", card:c, fromRes, level:c.lv}};
+  });
+  scanWin(p.reserved,true);
+  for(const lv of [1,2,3]) scanWin(v.board[lv],false);
+  if(win) return win.a;
+  if(!ctx.endRound){
+    const blk=strictBlock(ctx);   if(blk) return blk;   /* 层级0 终局阻断 */
+    const res=strictReserve(ctx); if(res) return res;   /* 层级1 高分牌预约 */
+    /* 层级2 贵族冲刺不产动作:缺色已写进 ctx.plan,由层级3/4 承接 */
+  }
+  /* 铁律 B:终局轮(有人已撞线)只剩最后一个回合 → 只做即时分,一律跳过 0/1/2 级的投资。
+     实现方式:上面已经跳过节流的层级0/1,层级3 在这里成为唯一的兑现口,层级4/5 照常。 */
+  /* ── 层级3 购买 → 层级4 拿宝石 → 层级5 保底:规格书的三条互斥层级,按硬排序逐个尝试。 ── */
+  const buy=strictBuy(ctx); if(buy) return buy;
+  const gem=strictTake(ctx); if(gem) return gem;
+  /* ── 层级5 保底:得分最高的 3 个不同色,不足 3 色则拿 2 个同色。
+     room<=0 时整条跳过:到顶再拿=拿一弃一的零和空转,不如把回合交给下面的牌库盲留。 ── */
+  const room=STRICT.GEM_MAX - aiTotalTok(p);
+  if(room>0){
+    const raw=guideGemCombos(ctx).find(sel=>COLORS.reduce((s,c)=>s+sel[c],0)<=room);
+    if(raw) return {kind:"gems", sel:raw};
+  }
+  /* 公共池被抽空:唯一还能执行的合法动作是牌库盲留(优先三级),否则交给上层跳过回合 */
+  if(p.reserved.length<3){
+    for(const lv of [3,2,1]) if(v.deckLen[lv]>0) return {kind:"resdeck", card:null, level:lv};
+  }
+  return null;
+}
 /* —— 动作空间(比旧 AI 完整:含单拿宝石与牌库盲留) —— */
 function aiGemCombos(v,pi){
   const legal=[];
@@ -1891,9 +2504,16 @@ function aiOpponentStep(v,oi){
   aiSimTake(v,oi,sel);
 }
 function aiKernelDecide(){
-  const prof=aiProfile(), base=aiBaseView();
-  const root=aiViewClone(base); aiDeterminize(root);
-  const acts=aiKernelActions(root);
+  const prof=aiProfile();
+  if(prof.policy === "guide") return aiGuideDecide();   /* 大师档:攻略规则引擎,不进内核 */
+  if(prof.policy === "strict") return aiStrictDecide();  /* 宗师档:优先级瀑布,同样不进内核 */
+  return aiKernelSearch(prof);
+}
+/* 纯搜索:给定权重,对动作空间做「落子 → 对手应手 → 估值」排序。
+   从 aiKernelDecide 里拆出来是为了让策略分派(policy)与搜索本体各自独立。 */
+function aiKernelSearch(prof){
+  const root=aiViewClone(aiBaseView()); aiDeterminize(root);
+  let acts=aiKernelActions(root);
   if(!acts.length) return null;
   acts.forEach(a=>{ a.cheap = aiCheapScore(root,root.me,a); });
   /* 分桶剪枝:保证每一类动作都有代表,不让「拿宝石」挤光「买卡」 */
@@ -1961,12 +2581,17 @@ function aiKernelAct(){
 }
 function aiKernelDiscard(){
   const p=cp(), v=aiBaseView(), pv=v.players[v.me];
+  const pol = aiProfile().policy;
   const discarded=emptyGemSelection();
   while(aiTotalTok(pv)>10){
+    /* 攻略档/宗师档每轮基于最新真实状态重建一次公开视图,弃牌口径与出牌口径保持一致 */
+    const ctx = pol==="guide" ? guideCtx() : pol==="strict" ? strictCtx() : null;
     let worst=null, ws=Infinity;
     [...COLORS,GOLD].forEach(c=>{
       if(pv.tokens[c]<=0) return;
-      const val=aiTokenKeepValue(v,v.me,c);
+      const val = pol==="guide" ? guideTokenKeepValue(ctx,c)
+                : pol==="strict" ? strictTokenKeepValue(ctx,c)
+                : aiTokenKeepValue(v,v.me,c);
       if(val<ws){ ws=val; worst=c; }
     });
     if(worst===null) break;
@@ -2648,6 +3273,18 @@ $("surrenderBtn").onclick = ()=>{
 // 设置界面:模式、人数与名字
 const modeSelect = $("modeSelect");
 const difficultySelect = $("difficultySelect");
+const DIFFICULTY_HINTS = {
+  easy:"会推演几步,但看不远、带决策噪声。",
+  normal:"搜索更深、严格取最优,不会失误。",
+  hard:"旋钮档最强:最深的推演 + 会预判对手应手。",
+  master:"攻略档:按「效率至上、攻防一体」的二人局打法出牌。",
+  grandmaster:"攻略完整档:把那份打法拆成六条优先级逐条照做,比大师档更严格,所以稳压大师档。"+
+              "但它只按套路出牌、不推演,碰上前推演很深的困难档会吃亏;"+
+              "想要电脑整体最难缠,选困难档。",
+};
+const showDifficultyHint = ()=>{ $("difficultyHint").textContent = DIFFICULTY_HINTS[difficultySelect.value] || ""; };
+difficultySelect.onchange = showDifficultyHint;
+showDifficultyHint();
 const pcSelect = $("pcSelect");
 const bgCheck = $("bgCheck");
 // 背景图开关:勾选=有背景,取消勾选立即去掉背景图,开始游戏后保持同一状态
@@ -2660,6 +3297,7 @@ function renderNameInputs(){
   $("difficultyLabel").classList.toggle("setup-hidden", !aiMode);
   difficultySelect.classList.toggle("setup-hidden", !aiMode);
   difficultySelect.disabled = !aiMode;
+  $("difficultyHint").classList.toggle("setup-hidden", !aiMode);
   $("pcLabel").classList.toggle("setup-hidden", aiMode);
   pcSelect.classList.toggle("setup-hidden", aiMode);
   pcSelect.disabled = aiMode;
@@ -2699,5 +3337,6 @@ $("startBtn").onclick = ()=>{
 </body>
 </html>
 </body>
+</html>
 </html>
 </html>
