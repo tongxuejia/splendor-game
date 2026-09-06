@@ -2221,7 +2221,8 @@ function finishTurn(){
   const p = cp();
   const eligible = S.nobles.filter(n=>n.taken===null && COLORS.every(c=>p.bonus[c]>=(n.cost[c]||0)));
   if(eligible.length===1){
-    grantNoble(eligible[0]);
+    grantNoble(eligible[0]); /* grantNoble 内已 nextTurn,须直接返回避免回合推进两次 */
+    return;
   }else if(eligible.length>1){
     if(p.isAI){
       grantNoble(aiPickNoble(p, eligible));
