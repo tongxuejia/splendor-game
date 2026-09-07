@@ -108,16 +108,16 @@ body:has(#setup:not([hidden])) #setup{margin:auto;}
   text-shadow:0 1px 0 #fff,0 0 3px rgba(255,255,255,.55);
 }
 .noble-info{
-  flex:0 0 30px; padding:4px 6px; display:flex;
+  flex:0 0 38px; padding:4px 4px; display:flex;
   align-items:center; justify-content:center;
 }
 .noble-title{
-  position:absolute; left:7px; bottom:35px; z-index:2;
+  position:absolute; left:7px; bottom:43px; z-index:2;
   color:#fff; font-size:10px; font-weight:bold; text-shadow:0 1px 3px #000;
 }
-.noble .req{display:flex; gap:4px; flex-wrap:wrap;}
-.noble .cost-gem{width:22px; height:22px; font-size:13px;}
-.noble-taken{position:absolute; right:5px; bottom:35px; z-index:2; color:#fff; font-size:10px;}
+.noble .req{display:flex; gap:5px; flex-wrap:wrap;}
+.noble .cost-gem{width:30px; height:30px; font-size:19px;}
+.noble-taken{position:absolute; right:5px; bottom:43px; z-index:2; color:#fff; font-size:10px;}
 
 /* 宝石库 */
 /* 三列网格:左右两列等宽,中列的宝石组因此在整行里真正居中 */
@@ -265,10 +265,10 @@ button.gem:disabled:hover{transform:none;}
   font-size:10px; font-weight:bold; text-shadow:0 1px 3px #000;
 }
 .card .card-body{
-  flex:0 0 38px; padding:5px 8px; display:flex; align-items:center;
+  flex:0 0 38px; padding:4px 8px; display:flex; align-items:center;
   background:#f4f1e8;
 }
-.card .cost{display:flex; flex-wrap:wrap; gap:4px; min-height:28px;}
+.card .cost{display:flex; flex-wrap:wrap; gap:4px; min-height:29px;}
 .card.afford{outline:2px solid #7fd4a0;}
 #board .card,.player.cur .rmini{cursor:pointer;}
 .card.sel,.rmini.sel{
@@ -289,7 +289,7 @@ button.gem:disabled:hover{transform:none;}
   justify-content:center; font-size:13px; font-weight:bold; color:#111;
   border:2px solid rgba(0,0,0,.15); position:relative;
 }
-.card .cost .cost-gem{width:28px; height:28px; font-size:19px;}
+.card .cost .cost-gem{width:29px; height:29px; font-size:19px;}
 
 /* 玩家面板 */
 #players{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; margin-top:16px;}
@@ -571,11 +571,11 @@ button.gem:disabled:hover{transform:none;}
   .noble{width:66px; height:66px; flex:0 0 66px; min-width:0; aspect-ratio:1;}
   .noble .pts{width:15px; height:15px; top:1px; right:1px;}
   .noble .pts > span{font-size:12px; transform:none;}
-  .noble-info{flex:0 0 17px; padding:1px 2px;}
-  .noble .req{gap:1px;}
-  .noble .cost-gem{width:11px; height:11px; font-size:8px; border-width:1px;}
-  .noble-title{font-size:6px; left:2px; bottom:18px;}
-  .noble-taken{font-size:6px; right:2px; bottom:18px;}
+  .noble-info{flex:0 0 21px; padding:1px 2px;}
+  .noble .req{gap:2px;}
+  .noble .cost-gem{width:16px; height:16px; font-size:11px; border-width:1px;}
+  .noble-title{font-size:6px; left:2px; bottom:22px;}
+  .noble-taken{font-size:6px; right:2px; bottom:22px;}
 
   /* 宝石库:6 颗宝石与「买 / 留」同行(小屏没有多余留白给左右平衡列,退回单行 flex) */
   #bank{display:flex; flex-wrap:wrap; gap:4px; margin:5px 0;}
@@ -613,8 +613,8 @@ button.gem:disabled:hover{transform:none;}
   .card .level-mark{font-size:6px; left:2px; bottom:1px;}
   .card .card-art.art-failed::before{font-size:8px;}
   .card .card-body{flex:0 0 21px; padding:1px 2px;}
-  .card .cost{gap:1px; min-height:13px; flex-wrap:nowrap;}
-  .card .cost .cost-gem{width:14px; height:14px; min-width:12px; font-size:11px; border-width:1px;}
+  .card .cost{gap:1px; min-height:15px; flex-wrap:nowrap;}
+  .card .cost .cost-gem{width:15px; height:15px; min-width:12px; font-size:11px; border-width:1px;}
   .cost-gem.disc::after{font-size:10px;}
   .card.sel,.rmini.sel{outline-width:2px; outline-offset:1px; box-shadow:none; transform:translateY(-2px);}
   .player .rmini.sel{outline-width:2px; box-shadow:none;}
@@ -994,6 +994,8 @@ const GEM_ART_PROMPTS = {
   K:"the glossy faceted surface of polished black onyx with subtle charcoal reflections",
   O:"a clean unadorned polished gold surface",
 };
+
+var cardUiStyle = "naimo";
 const GEM_ART = Object.fromEntries(Object.entries(GEM_ART_PROMPTS).map(([color])=>[
   color,
   `assets/court/gem_${color}.jpg`,
@@ -1090,7 +1092,7 @@ const CARD_ART = Object.fromEntries(
     lv,
     Object.fromEntries(Object.entries(prompts).map(([color])=>[
       color,
-      `assets/court/card_${lv}_${color}.jpg`,
+      `assets/${cardUiStyle}/card_${lv}_${color}.jpg`,
     ])),
   ])
 );
@@ -1113,7 +1115,7 @@ const NOBLE_ART_PROMPTS = [
   "a Milanese noblewoman in gold and blue silk with an onyx pendant",
 ];
 const NOBLE_ART = NOBLE_ART_PROMPTS.map((subject, i)=>
-  `assets/court/noble_${i}.jpg`
+  `assets/${cardUiStyle}/noble_${i}.jpg`
 );
 
 /* ── 清新卡通风:卡牌插画 prompt ── */
